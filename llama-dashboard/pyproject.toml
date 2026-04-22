@@ -5,7 +5,7 @@ description = "Lightweight dashboard for managing llama-server"
 requires-python = ">=3.8"
 dependencies = [
     "flask",
-    "huggingface_hub",
+    "huggingface_hub<0.33",
     "psutil",
     "tomli-w",
     "tomli; python_version < '3.11'",
