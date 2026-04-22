@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 try:
     import tomllib
 except ImportError:
-    import tomllib as tomllib  # type: ignore[no-redef]
+    import tomli as tomllib
 
 import tomli_w
 

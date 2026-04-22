@@ -2,12 +2,13 @@
 name = "llama-dashboard"
 version = "0.1.0"
 description = "Lightweight dashboard for managing llama-server"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "flask",
     "huggingface_hub",
     "psutil",
     "tomli-w",
+    "tomli; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
