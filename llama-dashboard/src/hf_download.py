@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import re
 import threading
@@ -5,6 +7,7 @@ import time
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 from .db import get_db
 
@@ -18,10 +21,10 @@ class DownloadItem:
     bytes_done: int = 0
     bytes_total: int = 0
     status: str = "queued"
-    error: str | None = None
-    started_at: str | None = None
-    finished_at: str | None = None
-    cancel_event: threading.Event = field(default_factory=threading.Event, compare=False)
+    error: Optional[str] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    cancel_event: threading.Event = field(default_factory=threading.Event)
 
 
 class ProgressTracker:
