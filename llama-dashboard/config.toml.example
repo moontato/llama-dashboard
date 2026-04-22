@@ -1,0 +1,23 @@
+[llama_server]
+bin = "/ssd/llama.cpp/build/bin/llama-server"
+host = "0.0.0.0"
+port = 8080
+
+[dashboard]
+host = "0.0.0.0"
+port = 8734
+
+[paths]
+models_dir = "/ssd/llamacpp_models"
+mmproj_dir = "/ssd/llamacpp_models/mmproj"
+models_ini_path = "/ssd/llamacpp_models/models.ini"
+log_dir = "./logs"
+
+[features]
+allow_multiple_servers = false
+
+[huggingface]
+token = ""
+
+[boolean_flag_keys]
+keys = []

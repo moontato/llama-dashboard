@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - llama-dashboard{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Server Status</h2>
+  <div id="server-status" hx-get="{{ url_for('api_system_stats') }}" hx-trigger="every 2s">
+    {% if server_state.status == 'running' %}
+      <div class="status-running">
+        <span class="badge badge-green">Running</span>
+        <p>PID: {{ server_state.pid }}</p>
+        <p>Preset: {{ server_state.preset }}</p>
+        <p>Uptime: {{ '%d:%02d:%02d' % (int(server_state.uptime) // 3600, (int(server_state.uptime) % 3600) // 60, int(server_state.uptime) % 60) }}</p>
+        <p>CPU: {{ '%.1f' % server_state.cpu_percent }}% | RSS: {{ '%.1f' % (server_state.rss / 1048576) }} MiB</p>
+      </div>
+    {% else %}
+      <div class="status-stopped">
+        <span class="badge badge-red">Stopped</span>
+      </div>
+    {% endif %}
+  </div>
+  {% if server_state.status == 'stopped' %}
+    <form method="post" action="{{ url_for('preset_launch', name='') }}" class="inline-form" style="margin-top:12px;">
+      <select name="preset" required>
+        <option value="">-- Select preset --</option>
+        {% for p in presets %}
+          <option value="{{ p }}">{{ p }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Start</button>
+    </form>
+  {% else %}
+    <div style="margin-top:12px;" class="actions">
+      <form method="post" action="{{ url_for('server_stop') }}" style="display:inline;">
+        <button type="submit">Stop</button>
+      </form>
+      <form method="post" action="{{ url_for('server_restart') }}" style="display:inline;">
+        <button type="submit">Restart</button>
+      </form>
+      <a href="{{ url_for('logs_page') }}" class="btn">View Logs</a>
+      <a href="http://localhost:{{ server_state.port or settings.llama_server_port }}" target="_blank" class="btn">Open llama-server UI</a>
+    </div>
+  {% endif %}
+</div>
+
+{% if stats %}
+<div class="card">
+  <h2>System Stats</h2>
+  <div id="system-stats" hx-get="{{ url_for('api_system_stats') }}" hx-trigger="every 2s">
+    {% if stats.error %}
+      <p class="muted">jtop unavailable: {{ stats.error }}</p>
+    {% else %}
+      <div class="stats-grid">
+        <div><strong>GPU</strong>: {{ stats.get('gpu_util_pct', '?') }}%</div>
+        <div><strong>Memory</strong>: {{ '%.0f' % stats.get('mem_used_mb', 0) }} / {{ '%.0f' % stats.get('mem_total_mb', 0) }} MiB</div>
+        <div><strong>Power</strong>: {{ stats.get('power_w', '?') }} W</div>
+        <div><strong>Temp</strong>: {{ stats.get('temp_c', '?') }} C</div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% if recent_downloads %}
+<div class="card">
+  <h2>Recent Downloads</h2>
+  <table>
+    <tr>
+      <th>File</th>
+      <th>Status</th>
+      <th>Time</th>
+    </tr>
+    {% for d in recent_downloads %}
+    <tr>
+      <td>{{ d.filename }}</td>
+      <td>{{ d.status }}</td>
+      <td>{{ d.finished_at[:19] if d.finished_at else '-' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% endblock %}

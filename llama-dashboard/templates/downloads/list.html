@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Downloads - llama-dashboard{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>New Download</h2>
+  <form method="post" action="{{ url_for('downloads_enqueue') }}">
+    <div class="form-group">
+      <label for="source">HuggingFace Source</label>
+      <input type="text" id="source" name="source" placeholder="user/repo, user/repo/file.gguf, or https://huggingface.co/..." required
+             oninput="autoDetectDest(this.value)">
+    </div>
+    <div class="form-group">
+      <label>Destination</label>
+      <label><input type="radio" name="dest" value="models" checked onchange="toggleCustom()"> Models</label>
+      <label><input type="radio" name="dest" value="mmproj" onchange="toggleCustom()"> MMProj</label>
+      <label><input type="radio" name="dest" value="custom" onchange="toggleCustom()"> Custom</label>
+    </div>
+    <div class="form-group" id="custom-dest-group" style="display:none;">
+      <label for="custom_dest">Custom Path</label>
+      <input type="text" id="custom_dest" name="custom_dest">
+    </div>
+    <button type="submit" class="btn">Download</button>
+  </form>
+</div>
+
+{% if queue %}
+<div class="card">
+  <h2>Active Downloads</h2>
+  <table>
+    <tr>
+      <th>File</th>
+      <th>Source</th>
+      <th>Progress</th>
+      <th>Status</th>
+      <th>Actions</th>
+    </tr>
+    {% for d in queue %}
+    <tr id="download-{{ d.id }}" hx-get="{{ url_for('download_status', download_id=d.id) }}" hx-trigger="every 1s">
+      <td>{{ d.filename }}</td>
+      <td>{{ d.repo_id }}</td>
+      <td>
+        {% if d.bytes_total > 0 %}
+          {{ '%.0f' % (d.bytes_done / d.bytes_total * 100) }}%
+        {% else %}
+          ?
+        {% endif %}
+      </td>
+      <td>{{ d.status }}</td>
+      <td>
+        <form method="post" action="{{ url_for('downloads_cancel', download_id=d.id) }}" style="display:inline;">
+          <button type="submit" class="btn btn-sm btn-danger">Cancel</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+{% if history %}
+<div class="card">
+  <h2>History</h2>
+  <table>
+    <tr>
+      <th>File</th>
+      <th>Status</th>
+      <th>Error</th>
+      <th>Finished</th>
+    </tr>
+    {% for d in history %}
+    <tr>
+      <td>{{ d.filename }}</td>
+      <td>{{ d.status }}</td>
+      <td class="muted">{{ d.error[:80] if d.error else '' }}</td>
+      <td>{{ d.finished_at[:19] if d.finished_at else '-' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<script>
+function autoDetectDest(val) {
+  if (/mmproj/i.test(val)) {
+    var radios = document.querySelectorAll('input[name="dest"]');
+    radios[1].checked = true;
+  }
+}
+function toggleCustom() {
+  var group = document.getElementById('custom-dest-group');
+  var radios = document.querySelectorAll('input[name="dest"]');
+  group.style.display = radios[2].checked ? 'block' : 'none';
+}
+</script>
+{% endblock %}
