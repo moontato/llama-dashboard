@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import shlex
 import os
 from .settings import get_settings
