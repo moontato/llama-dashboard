@@ -1,4 +1,0 @@
-[project]
-name = "hf-xet"
-version = "1.4.3"
-description = "Stub for hf-xet (huggingface_hub build dep broken on some platforms)"
