@@ -1,0 +1,23 @@
+[Unit]
+Description=jtop-web dashboard
+Documentation=https://github.com/rbonghi/jetson_stats
+After=network.target
+
+[Service]
+Type=simple
+# Run as a dedicated non-root user.
+# That user must be a member of the group that owns /run/jtop.sock
+# (typically "jtop"). Create with:
+#   sudo useradd -r -s /sbin/nologin jtop-web
+#   sudo usermod -aG jtop jtop-web
+User=jtop-web
+WorkingDirectory=/opt/jtop-web
+ExecStart=/usr/bin/python3 /opt/jtop-web/app.py
+Restart=always
+RestartSec=5
+
+# Harden slightly — no writes needed outside the working dir.
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

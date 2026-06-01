@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Orin</title>
+  <style>
+    :root {
+      --bg:       #0f0f13;
+      --surface:  #1a1a22;
+      --border:   #2a2a38;
+      --text:     #e0e0ef;
+      --muted:    #707090;
+      --ok:       #22c55e;
+      --warn:     #f59e0b;
+      --crit:     #ef4444;
+      --crit-bg:  rgba(239,68,68,0.08);
+      --cpu:      #6366f1;
+      --gpu:      #818cf8;
+      --swap:     #a78bfa;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: ui-monospace, 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      background: var(--bg);
+      color: var(--text);
+      padding: 1rem;
+      max-width: 500px;
+      margin: 0 auto;
+      font-size: 14px;
+    }
+
+    /* ── Banners ──────────────────────────────────────────── */
+    .banner {
+      display: none;
+      border-radius: 6px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+    .banner.visible { display: block; }
+
+    #disconnect-banner {
+      background: rgba(239,68,68,0.12);
+      border: 1px solid var(--crit);
+      color: var(--crit);
+    }
+    #stale-banner {
+      background: rgba(167,139,250,0.1);
+      border: 1px solid var(--swap);
+      color: var(--swap);
+    }
+
+    /* ── Header ───────────────────────────────────────────── */
+    .header {
+      margin-bottom: 1rem;
+      padding-bottom: 0.6rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .header-model {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 0.2rem;
+    }
+    .header-meta {
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+
+    /* ── Cards ────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.8rem 1rem;
+      margin-bottom: 0.75rem;
+      transition: border-color 0.3s;
+    }
+    .card-label {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+
+    /* ── RAM card ─────────────────────────────────────────── */
+    .ram-pct {
+      font-size: 3rem;
+      font-weight: 700;
+      line-height: 1;
+      transition: color 0.3s;
+      color: var(--ok);
+    }
+    .ram-detail {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin: 0.2rem 0 0.55rem;
+    }
+
+    /* State colouring on the RAM card */
+    .s-ok   .ram-pct  { color: var(--ok);   }
+    .s-warn .ram-pct  { color: var(--warn); }
+    .s-crit .ram-pct  { color: var(--crit); }
+    .s-ok   .bar-fill { background: var(--ok);   }
+    .s-warn .bar-fill { background: var(--warn); }
+    .s-crit .bar-fill { background: var(--crit); }
+
+    .s-crit#ram-card {
+      border-color: var(--crit);
+      background: var(--crit-bg);
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.65; }
+    }
+
+    /* ── Progress bars ────────────────────────────────────── */
+    .bar-track {
+      height: 10px;
+      background: var(--border);
+      border-radius: 5px;
+      overflow: hidden;
+      margin-bottom: 0.3rem;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 5px;
+      transition: width 0.5s ease, background 0.3s;
+    }
+
+    /* ── Swap card ────────────────────────────────────────── */
+    .swap-pct {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--text);
+      transition: color 0.3s;
+    }
+    .swap-fill          { background: var(--swap); }
+    .sw-warn .swap-pct  { color: var(--warn); }
+    .sw-warn .swap-fill { background: var(--warn); }
+    .sw-crit .swap-pct  { color: var(--crit); }
+    .sw-crit .swap-fill { background: var(--crit); }
+
+    .shared-line {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-top: 0.4rem;
+    }
+    .shared-line b { color: var(--text); }
+
+    /* ── Sparklines ───────────────────────────────────────── */
+    .sparkline {
+      display: block;
+      width: 100%;
+      height: 28px;
+      margin-top: 0.45rem;
+    }
+
+    /* ── Tiles 2×2 ────────────────────────────────────────── */
+    .tiles {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.6rem;
+      margin-bottom: 0.75rem;
+    }
+    .tile {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.7rem 0.85rem;
+    }
+    .tile-label {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      margin-bottom: 0.15rem;
+    }
+    .tile-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .tile-unit {
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+
+    /* ── CPU strip ────────────────────────────────────────── */
+    #cpu-strip {
+      display: flex;
+      gap: 3px;
+      align-items: flex-end;
+      height: 44px;
+      margin-top: 0.3rem;
+    }
+    .cpu-col {
+      flex: 1;
+      height: 100%;
+      background: var(--border);
+      border-radius: 2px;
+      position: relative;
+      overflow: hidden;
+    }
+    .cpu-fill {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      background: var(--cpu);
+      border-radius: 2px;
+      transition: height 0.5s ease;
+    }
+
+    /* ── Footer ───────────────────────────────────────────── */
+    .footer {
+      font-size: 0.65rem;
+      color: var(--muted);
+      text-align: right;
+      margin-top: 0.25rem;
+    }
+
+    /* ── Advanced controls ────────────────────────────────── */
+    .advanced-card { cursor: default; }
+
+    .advanced-summary {
+      list-style: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+      margin-bottom: 0;
+    }
+    .advanced-summary::-webkit-details-marker { display: none; }
+    .advanced-summary::after {
+      content: '▶';
+      font-size: 0.6rem;
+      color: var(--muted);
+      transition: transform 0.2s;
+    }
+    details[open] > .advanced-summary::after { transform: rotate(90deg); }
+
+    .advanced-body   { margin-top: 0.75rem; }
+    .advanced-desc   { font-size: 0.72rem; color: var(--muted); margin-bottom: 0.65rem; }
+
+    .adv-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .adv-svc-name { font-size: 0.85rem; font-weight: 600; color: var(--text); }
+    .adv-svc-hint { font-size: 0.68rem; color: var(--muted); margin-top: 0.1rem; }
+
+    .restart-btn {
+      font-family: inherit;
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 0.4rem 1rem;
+      border-radius: 6px;
+      border: 1px solid var(--warn);
+      background: rgba(245,158,11,0.1);
+      color: var(--warn);
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .restart-btn:hover:not(:disabled) { background: rgba(245,158,11,0.22); }
+    .restart-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .restart-status {
+      font-size: 0.72rem;
+      margin-top: 0.5rem;
+      min-height: 1.1em;
+      color: var(--muted);
+    }
+    .restart-status.ok  { color: var(--ok);   }
+    .restart-status.err { color: var(--crit); }
+
+    .adv-divider { border: none; border-top: 1px solid var(--border); margin: 0.75rem 0; }
+  </style>
+</head>
+<body>
+
+  <div id="disconnect-banner" class="banner">jtop disconnected — reconnecting&hellip;</div>
+  <div id="stale-banner"      class="banner">No data for 5 s — stream may be stalled</div>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-model" id="hdr-model">Jetson AGX Orin</div>
+    <div class="header-meta">
+      <span id="hdr-jetpack">JetPack &mdash;</span>
+      &bull;
+      <span id="hdr-nvp">nvp &mdash;</span>
+    </div>
+  </div>
+
+  <!-- RAM -->
+  <div class="card s-ok" id="ram-card">
+    <div class="card-label">RAM</div>
+    <div class="ram-pct" id="ram-pct">&#8212;%</div>
+    <div class="ram-detail" id="ram-detail">&#8212; / &#8212; GiB</div>
+    <div class="bar-track">
+      <div class="bar-fill" id="ram-bar" style="width:0%"></div>
+    </div>
+    <canvas class="sparkline" id="ram-spark"></canvas>
+  </div>
+
+  <!-- Swap (zram) -->
+  <div class="card" id="swap-card">
+    <div class="card-label">Swap &mdash; zram (memory pressure)</div>
+    <div class="swap-pct" id="swap-pct">&#8212;%</div>
+    <div class="ram-detail" id="swap-detail">&#8212; / &#8212; GiB</div>
+    <div class="bar-track">
+      <div class="bar-fill swap-fill" id="swap-bar" style="width:0%"></div>
+    </div>
+    <div class="shared-line">Shared / GPU model footprint: <b id="shared-val">&#8212;</b> GiB</div>
+  </div>
+
+  <!-- Tiles -->
+  <div class="tiles">
+    <div class="tile">
+      <div class="tile-label">GPU</div>
+      <span class="tile-value" id="gpu-val">&#8212;</span><span class="tile-unit">%</span>
+      <canvas class="sparkline" id="gpu-spark" style="height:22px"></canvas>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Junction temp</div>
+      <span class="tile-value" id="temp-val">&#8212;</span><span class="tile-unit"> &deg;C</span>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Total power</div>
+      <span class="tile-value" id="power-val">&#8212;</span><span class="tile-unit"> W</span>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Fan</div>
+      <span class="tile-value" id="fan-val">&#8212;</span><span class="tile-unit">%</span>
+    </div>
+  </div>
+
+  <!-- CPU strip -->
+  <div class="card">
+    <div class="card-label" id="cpu-label">CPU</div>
+    <div id="cpu-strip"></div>
+  </div>
+
+  <!-- Advanced controls -->
+  <details class="card advanced-card">
+    <summary class="card-label advanced-summary">Advanced controls</summary>
+    <div class="advanced-body">
+      <div class="adv-row">
+        <div>
+          <div class="adv-svc-name">llama-server.service</div>
+          <div class="adv-svc-hint">systemd unit &mdash; restarts may interrupt inference</div>
+        </div>
+        <button id="restart-btn" class="restart-btn" onclick="restartLlama()">Restart</button>
+      </div>
+      <div id="restart-status" class="restart-status"></div>
+
+      <hr class="adv-divider">
+
+      <div class="adv-row">
+        <div>
+          <div class="adv-svc-name">models_ini</div>
+          <div class="adv-svc-hint">/ssd/llamacpp_models/models_ini</div>
+        </div>
+        <button id="gitpull-btn" class="restart-btn" onclick="gitPullModels()">git pull</button>
+      </div>
+      <div id="gitpull-status" class="restart-status"></div>
+    </div>
+  </details>
+
+  <div class="footer" id="footer-ts">Last update: &mdash;</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ── Constants ───────────────────────────────────────────
+  var STALE_MS     = 5000;
+  var STATE_ICON   = { ok: '', warn: '⚠ ', critical: '🔴 ' };
+
+  // ── State ───────────────────────────────────────────────
+  var staleTimer   = null;
+  var prevState    = 'ok';
+  var notifSent    = false;
+  var cpuReady     = false;
+
+  // ── Sparklines ──────────────────────────────────────────
+  function Sparkline(canvasId, strokeColor) {
+    this.el    = document.getElementById(canvasId);
+    this.color = strokeColor;
+  }
+  Sparkline.prototype.draw = function (data) {
+    var el  = this.el;
+    var ctx = el.getContext('2d');
+    var dpr = window.devicePixelRatio || 1;
+    var w   = el.offsetWidth  * dpr;
+    var h   = el.offsetHeight * dpr;
+    if (w < 2 || h < 2) return;
+    el.width  = w;
+    el.height = h;
+    ctx.clearRect(0, 0, w, h);
+    if (!data || data.length < 2) return;
+
+    ctx.beginPath();
+    for (var i = 0; i < data.length; i++) {
+      var x = (i / (data.length - 1)) * w;
+      var y = h - (data[i] / 100) * h;
+      if (i === 0) ctx.moveTo(x, y);
+      else         ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth   = 1.5 * dpr;
+    ctx.lineJoin    = 'round';
+    ctx.stroke();
+
+    // fill under line
+    ctx.lineTo(w, h);
+    ctx.lineTo(0, h);
+    ctx.closePath();
+    ctx.fillStyle = this.color + '22';
+    ctx.fill();
+  };
+
+  var ramSpark = new Sparkline('ram-spark', '#22c55e');
+  var gpuSpark = new Sparkline('gpu-spark', '#818cf8');
+
+  // ── CPU bars ────────────────────────────────────────────
+  function ensureCpuBars(count) {
+    if (cpuReady) return;
+    cpuReady = true;
+    document.getElementById('cpu-label').textContent = 'CPU (' + count + ' cores)';
+    var strip = document.getElementById('cpu-strip');
+    strip.innerHTML = '';
+    for (var i = 0; i < count; i++) {
+      var col  = document.createElement('div');
+      col.className = 'cpu-col';
+      col.title     = 'CPU' + (i + 1);
+      var fill = document.createElement('div');
+      fill.className = 'cpu-fill';
+      fill.id        = 'cpuf-' + i;
+      fill.style.height = '0%';
+      col.appendChild(fill);
+      strip.appendChild(col);
+    }
+  }
+
+  // ── State / color ────────────────────────────────────────
+  function applyRamState(state, ramPct) {
+    var card = document.getElementById('ram-card');
+    card.className = 'card s-' + (state === 'critical' ? 'crit' : state);
+
+    if (state !== prevState) {
+      if (state === 'critical' && !notifSent) {
+        notifSent = true;
+        notify(ramPct);
+      }
+      if (state !== 'critical') notifSent = false;
+      prevState = state;
+    }
+  }
+
+  function swapClass(pct) {
+    if (pct >= 50) return 'card sw-crit';
+    if (pct >= 25) return 'card sw-warn';
+    return 'card';
+  }
+
+  function updateTitle(state, ramPct) {
+    document.title = (STATE_ICON[state] || '') + ramPct + '% — Orin';
+  }
+
+  // ── Web Notification (optional stretch) ─────────────────
+  function notify(ramPct) {
+    if (!('Notification' in window)) return;
+    function send() {
+      new Notification('⚠️ Orin RAM Critical', {
+        body: 'RAM at ' + ramPct + '% — OOM risk',
+        tag:  'orin-oom',
+      });
+    }
+    if (Notification.permission === 'granted') {
+      send();
+    } else if (Notification.permission !== 'denied') {
+      Notification.requestPermission().then(function (p) {
+        if (p === 'granted') send();
+      });
+    }
+  }
+
+  // ── DOM update ───────────────────────────────────────────
+  function setText(id, val) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = val;
+  }
+
+  function update(d) {
+    // Board info arrives as a one-off event.
+    if (d.board) {
+      setText('hdr-model',   d.board.model   || 'Jetson AGX Orin');
+      setText('hdr-jetpack', 'JetPack ' + (d.board.jetpack || '—'));
+      return;
+    }
+
+    if (d.disconnected) {
+      document.getElementById('disconnect-banner').classList.add('visible');
+      return;
+    }
+
+    document.getElementById('disconnect-banner').classList.remove('visible');
+
+    var ram  = d.ram;
+    var swap = d.swap;
+
+    // RAM
+    setText('ram-pct',    ram.pct + '%');
+    setText('ram-detail', ram.used_gib + ' / ' + ram.total_gib + ' GiB');
+    document.getElementById('ram-bar').style.width = Math.min(ram.pct, 100) + '%';
+    applyRamState(d.state, ram.pct);
+    updateTitle(d.state, ram.pct);
+
+    // Swap
+    setText('swap-pct',    swap.pct + '%');
+    setText('swap-detail', swap.used_gib + ' / ' + swap.total_gib + ' GiB');
+    document.getElementById('swap-bar').style.width = Math.min(swap.pct, 100) + '%';
+    document.getElementById('swap-card').className  = swapClass(swap.pct);
+
+    // Shared
+    setText('shared-val', ram.shared_gib);
+
+    // Tiles
+    setText('gpu-val',   d.gpu_pct);
+    setText('temp-val',  d.temp_c);
+    setText('power-val', d.power_w);
+    setText('fan-val',   d.fan_pct);
+
+    // nvp in header
+    setText('hdr-nvp', d.nvp ? 'nvp ' + d.nvp : 'nvp —');
+
+    // CPU
+    if (d.cpu_pct && d.cpu_pct.length) {
+      ensureCpuBars(d.cpu_pct.length);
+      for (var i = 0; i < d.cpu_pct.length; i++) {
+        var bar = document.getElementById('cpuf-' + i);
+        if (bar) bar.style.height = d.cpu_pct[i] + '%';
+      }
+    }
+
+    // Sparklines
+    if (d.history) {
+      ramSpark.draw(d.history.ram_pct);
+      gpuSpark.draw(d.history.gpu_pct);
+    }
+
+    // Timestamp
+    var dt = new Date(d.ts * 1000);
+    setText('footer-ts', 'Last update: ' + dt.toLocaleTimeString());
+  }
+
+  // ── Stale detection ──────────────────────────────────────
+  function resetStale() {
+    clearTimeout(staleTimer);
+    document.getElementById('stale-banner').classList.remove('visible');
+    staleTimer = setTimeout(function () {
+      document.getElementById('stale-banner').classList.add('visible');
+    }, STALE_MS);
+  }
+
+  // ── EventSource ──────────────────────────────────────────
+  var es = new EventSource('/stream');
+
+  es.onmessage = function (evt) {
+    resetStale();
+    try {
+      update(JSON.parse(evt.data));
+    } catch (e) {
+      console.warn('jtop-web parse error', e);
+    }
+  };
+
+  es.onerror = function () {
+    document.getElementById('disconnect-banner').classList.add('visible');
+  };
+
+  resetStale();
+}());
+
+// ── Advanced controls (outside IIFE so onclick="" can reach it) ──
+function _advBtn(btnId, statusId, url, cooldownMs) {
+  var btn    = document.getElementById(btnId);
+  var status = document.getElementById(statusId);
+  var label  = btn.textContent;
+
+  btn.disabled       = true;
+  btn.textContent    = 'Working…';
+  status.textContent = '';
+  status.className   = 'restart-status';
+
+  fetch(url, { method: 'POST' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      btn.textContent = label;
+      if (d.ok) {
+        status.textContent = '✓ ' + (d.output || 'Done');
+        status.className   = 'restart-status ok';
+        setTimeout(function () { btn.disabled = false; }, cooldownMs);
+      } else {
+        status.textContent = '✗ ' + (d.error || 'Unknown error');
+        status.className   = 'restart-status err';
+        btn.disabled       = false;
+      }
+    })
+    .catch(function () {
+      btn.textContent    = label;
+      btn.disabled       = false;
+      status.textContent = '✗ Network error';
+      status.className   = 'restart-status err';
+    });
+}
+
+function restartLlama()  { _advBtn('restart-btn',  'restart-status',  '/api/restart-llama',    30000); }
+function gitPullModels() { _advBtn('gitpull-btn',  'gitpull-status',  '/api/git-pull-models',  30000); }
+</script>
+</body>
+</html>
