@@ -42,7 +42,7 @@ _restart_lock    = threading.Lock()
 
 _gitpull_state   = {"last_ts": 0.0}
 _gitpull_lock    = threading.Lock()
-MODELS_INI_PATH  = "/ssd/llamacpp_models/models_ini"
+MODELS_INI_PATH  = "/mnt/ssd/llamacpp_models/models_ini"
 
 app = Flask(__name__, static_folder="static")
 
