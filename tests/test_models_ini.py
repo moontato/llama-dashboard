@@ -128,6 +128,38 @@ class Edits(unittest.TestCase):
         self.assertEqual(parse(text).render(), text)
 
 
+# Single-block regions on both sides of INDIVIDUAL MODELS; the PROFILES
+# marker is owned by OnlyProfile's leading (there is a block before it),
+# so every delete/relocation edge case around it is exercised.
+SINGLE_MID = (
+    "version = 1\n"
+    "\n"
+    "[*]\n"
+    "threads = 2\n"
+    "\n"
+    "# == PROFILES ==\n"
+    "\n"
+    "[OnlyProfile]\n"
+    "model = /x/a.gguf\n"
+    "\n"
+    "# == INDIVIDUAL MODELS ==\n"
+    "\n"
+    "[solo]\n"
+    "model = /x/b.gguf\n"
+    "\n"
+    "# == ARCHIVED ==\n"
+    "\n"
+    "# [old]\n"
+    "# model = /x/old.gguf\n"
+    "\n"
+)
+
+# Same, but with no block before PROFILES: the marker then lives in the
+# document header.
+SINGLE_FIRST = SINGLE_MID.replace("threads = 2\n\n", "", 1) \
+    .replace("[*]\n", "", 1)
+
+
 class Sections(unittest.TestCase):
     def setUp(self):
         self.doc = parse(TEXT)
@@ -137,7 +169,7 @@ class Sections(unittest.TestCase):
         b = self.doc.block("Test-Model")
         self.assertFalse(b.archived)
         self.assertEqual(b.region, "individual")
-        # inserted at the end of the individual area (after its last block)
+        # inserted at the bottom of the individual active group
         last_individual = max(i for i, x in enumerate(self.doc.blocks)
                                if x.region == "individual" and x.name != "Test-Model")
         self.assertEqual(self.doc.blocks.index(b), last_individual + 1)
@@ -166,15 +198,26 @@ class Sections(unittest.TestCase):
         with self.assertRaises(ModelsIniError):
             self.doc.add_section("Qwen3.5-4B", [("model", "x")])
 
+    def _canonical(self, doc=None):
+        # within every region: active blocks on top, archived below
+        doc = doc or self.doc
+        seen = {}
+        for b in doc.blocks:
+            if b.archived:
+                seen[b.region] = True
+            else:
+                self.assertFalse(seen.get(b.region), b.name)
+
     def test_archive(self):
-        idx = self.doc.blocks.index(self.doc.block("Qwen3.8-27B-low"))
         self.doc.archive_section("Qwen3.8-27B-low")
         with self.assertRaises(ModelsIniError):
             self.doc.block("Qwen3.8-27B-low")
         b = self.doc.block("Qwen3.8-27B-low", archived=True)
-        # in place: same index, same region (does NOT move to ARCHIVED)
-        self.assertEqual(self.doc.blocks.index(b), idx)
+        # sunk to the bottom of the individual region (not into ARCHIVED)
         self.assertEqual(b.region, "individual")
+        i = self.doc.blocks.index(b)
+        self.assertEqual(self.doc.blocks[i + 1].region, "archived")
+        self.assertEqual(self.doc.blocks[i - 1].region, "individual")
         text = self.doc.render()
         self.assertNotIn("\n[Qwen3.8-27B-low]\n", text)
         self.assertIn("# [Qwen3.8-27B-low]\n", text)
@@ -183,20 +226,67 @@ class Sections(unittest.TestCase):
             s = line.strip()
             if s:
                 self.assertTrue(s.startswith("#"), line)
-        # marker intact, section still sits above it
-        self.assertEqual(text.count("# == ARCHIVED =="), 1)
-        self.assertLess(text.index("# [Qwen3.8-27B-low]"),
-                         text.index("# == ARCHIVED =="))
+        # all region markers intact
+        for m in ("# == PROFILES ==", "# == INDIVIDUAL MODELS ==",
+                  "# == ARCHIVED =="):
+            self.assertEqual(text.count(m), 1)
+        self._canonical()
         self.assertEqual(parse(text).render(), text)
 
-    def test_restore_after_archive_is_byte_noop(self):
-        # archive+restore is the exact inverse for any active section
-        for name in ("Qwen3-Coder-Next", "Qwen3.8-27B-low", "General-Bot-small"):
+    def test_archive_region_head_keeps_marker(self):
+        doc = parse(TEXT)
+        doc.archive_section("General-Bot-small")  # owns the PROFILES marker
+        text = doc.render()
+        self.assertEqual(text.count("# == PROFILES =="), 1)
+        # marker stays at the region head, above General-Bot-large
+        self.assertLess(text.index("# == PROFILES =="),
+                         text.index("[General-Bot-large]"))
+        # the docs above the section travelled with it
+        self.assertLess(
+            text.index("; this will be used as the default config for that model"),
+            text.index("# [General-Bot-small]"))
+        # and it sits at the bottom of profiles, above INDIVIDUAL MODELS
+        self.assertLess(text.index("# [General-Bot-small]"),
+                         text.index("# == INDIVIDUAL MODELS =="))
+        self._canonical(doc)
+        self.assertEqual(parse(text).render(), text)
+
+    def test_archive_restore_converges(self):
+        # archive+restore keeps content and the canonical layout: the
+        # section ends up at the bottom of its region's active group
+        for name in ("Qwen3.8-27B-low", "Qwen3-Coder-Next",
+                     "General-Bot-small"):
             with self.subTest(name=name):
                 doc = parse(TEXT)
                 doc.archive_section(name)
                 doc.restore_section(name)
-                self.assertEqual(doc.render(), TEXT)
+                b = doc.block(name)
+                nxt = doc.blocks[doc.blocks.index(b) + 1]
+                self.assertTrue(
+                    nxt.archived or nxt.region != b.region, name)
+                self._canonical(doc)
+                self.assertEqual(parse(doc.render()).render(), doc.render())
+
+    def test_restore_moves_above_first_archived(self):
+        doc = parse(TEXT)
+        doc.archive_section("Coding-Bot")        # last profile: at region end
+        doc.archive_section("Reasoning-Bot")     # sinks below Coding-Bot
+        doc.restore_section("Reasoning-Bot")     # raises above Coding-Bot
+        i_rb = doc.blocks.index(doc.block("Reasoning-Bot"))
+        i_cb = doc.blocks.index(doc.block("Coding-Bot", archived=True))
+        self.assertLess(i_rb, i_cb)
+        self._canonical(doc)
+        self.assertEqual(parse(doc.render()).render(), doc.render())
+
+    def test_restore_after_region_head_archive(self):
+        doc = parse(TEXT)
+        doc.archive_section("General-Bot-small")
+        doc.restore_section("General-Bot-small")
+        text = doc.render()
+        self.assertEqual(text.count("# == PROFILES =="), 1)
+        self.assertLess(text.index("# == PROFILES =="),
+                         text.index("[General-Bot-large]"))
+        self.assertEqual(parse(text).render(), text)
 
     def test_restore(self):
         doc = parse(TEXT)
@@ -231,6 +321,58 @@ class Sections(unittest.TestCase):
         text = doc.render()
         self.assertNotIn("[gpt-oss-20b]", text)
         self.assertEqual(parse(text).render(), text)
+
+    def test_delete_last_block_of_nonfinal_region_drops_marker(self):
+        # OnlyProfile is the region head (owns the PROFILES marker) and
+        # the region's last block: deleting it empties the region, so the
+        # marker must be dropped, NOT migrated onto the next region's head.
+        doc = parse(SINGLE_MID)
+        doc.delete_section("OnlyProfile")
+        text = doc.render()
+        self.assertNotIn("# == PROFILES ==", text)
+        self.assertEqual(text.count("# == INDIVIDUAL MODELS =="), 1)
+        self.assertEqual(text.count("# == ARCHIVED =="), 1)
+        reparsed = parse(text)
+        self.assertEqual(reparsed.block("solo").region, "individual")
+        self.assertEqual(reparsed.block("old", archived=True).region,
+                         "archived")
+        self.assertEqual(parse(text).render(), text)
+
+    def test_delete_region_head_same_region_keeps_marker(self):
+        # GBS owns the PROFILES marker but the region keeps other blocks:
+        # General-Bot-large becomes the region head and must take the
+        # marker, above it, with its seam blank intact.
+        doc = parse(TEXT)
+        doc.delete_section("General-Bot-small")
+        text = doc.render()
+        self.assertEqual(text.count("# == PROFILES =="), 1)
+        gbl = parse(text).block("General-Bot-large")
+        self.assertEqual(gbl.region, "profiles")
+        self.assertEqual(gbl.leading[0], "\n")
+        self.assertEqual(gbl.leading[1], "# == PROFILES ==\n")
+        self.assertLess(text.index("# == PROFILES =="),
+                        text.index("[General-Bot-large]"))
+        self.assertEqual(parse(text).render(), text)
+
+    def test_delete_first_block_header_marker_dropped(self):
+        # No block before PROFILES: the marker lives in the document
+        # header and must be dropped too when the region empties.
+        doc = parse(SINGLE_FIRST)
+        self.assertEqual(doc.block("OnlyProfile").region, "profiles")
+        doc.delete_section("OnlyProfile")
+        text = doc.render()
+        self.assertNotIn("# == PROFILES ==", text)
+        self.assertEqual(parse(text).block("solo").region, "individual")
+        self.assertEqual(parse(text).render(), text)
+
+    def test_archive_restore_single_block_region_noop_pos(self):
+        # single-block region: archive/restore is pos-keeping (no move),
+        # so the marker never moves and the file is byte-identical.
+        doc = parse(SINGLE_MID)
+        doc.archive_section("OnlyProfile")
+        doc.restore_section("OnlyProfile")
+        self.assertFalse(doc.block("OnlyProfile").archived)
+        self.assertEqual(doc.render(), SINGLE_MID)
 
     def test_unknown_section(self):
         with self.assertRaises(ModelsIniError):

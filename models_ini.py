@@ -21,6 +21,12 @@ _KEY_RE      = re.compile(r"^(?P<key>[^=\s#;]+)\s*=(.*)$")
 _REGIONS     = {"PROFILES": "profiles", "INDIVIDUAL MODELS": "individual", "ARCHIVED": "archived"}
 
 
+def _marker_region(line: str):
+    """Document region named by a marker line, or None."""
+    m = _MARKER_RE.match(line.strip())
+    return _REGIONS.get(m.group(1).strip()) if m else None
+
+
 def _eol(line: str) -> str:
     """Trailing EOL of a raw line (may be '' for the final line)."""
     n = len(line) - len(line.rstrip("\r\n"))
@@ -115,16 +121,64 @@ class Document:
                 return i
         return len(self.blocks)
 
+    def _region_span(self, region: str):
+        """(start, last) block indices of ``region``, or None."""
+        start = next((i for i, b in enumerate(self.blocks)
+                      if b.region == region), None)
+        if start is None:
+            return None
+        last = start
+        while last + 1 < len(self.blocks) and \
+                self.blocks[last + 1].region == region:
+            last += 1
+        return start, last
+
+    def _active_group_end(self, region: str) -> int:
+        """Insertion index preserving the canonical layout: active blocks
+        on top, archived blocks sunk to the bottom of their region."""
+        span = self._region_span(region)
+        if span is None:
+            return self._first_archived_idx()
+        start, last = span
+        for i in range(start, last + 1):
+            if self.blocks[i].archived:
+                return i
+        return last + 1
+
+    def _relocate(self, b: Block, insert_at: int) -> None:
+        """Move ``b`` to ``insert_at`` (index into the block list AFTER
+        removal). A region marker owned by ``b``'s leading is handed to
+        whichever block now starts the region, so the marker stays at the
+        region head. The moved block's leading is normalised to a blank
+        separator plus any comment lines it carried."""
+        markers = [l for l in b.leading if _MARKER_RE.match(l.strip())]
+        rest = [l for l in b.leading if not _MARKER_RE.match(l.strip())]
+        content = list(rest)
+        while content and not content[0].strip():
+            content.pop(0)
+        while content and not content[-1].strip():
+            content.pop()
+        idx = next(k for k, x in enumerate(self.blocks) if x is b)
+        del self.blocks[idx]
+        self.blocks.insert(insert_at, b)
+        if content:
+            b.leading = ["\n"] + content + ["\n"]
+        else:
+            b.leading = [] if insert_at == 0 else ["\n"]
+        if markers:
+            start = next(i for i, x in enumerate(self.blocks)
+                         if x.region == b.region)
+            h = self.blocks[start]
+            pos = 1 if h.leading and not h.leading[0].strip() else 0
+            h.leading[pos:pos] = markers
+
     def add_section(self, name: str, keys: List[Tuple[str, str]],
                     region: str = "individual") -> None:
-        """Append a new active section at the end of ``region``'s area."""
+        """Append a new active section at the bottom of its region's
+        active group (above any archived blocks)."""
         if any(b.name == name and not b.archived for b in self.blocks):
             raise ModelsIniError(f"section [{name}] already exists")
-        idx = -1
-        for i, b in enumerate(self.blocks):
-            if b.region == region:
-                idx = i
-        idx = idx + 1 if idx >= 0 else self._first_archived_idx()
+        idx = self._active_group_end(region)
         block = Block(
             name=name,
             region=region,
@@ -136,7 +190,8 @@ class Document:
         self.blocks.insert(idx, block)
 
     def archive_section(self, name: str) -> None:
-        """Comment an active section out IN PLACE (keeps position/region)."""
+        """Archive an active section: comment it and sink it to the bottom
+        of its region (below all other blocks of that region)."""
         b = self.block(name)
         body = []
         for line in b.body:
@@ -148,10 +203,22 @@ class Document:
         b.header = f"# [{name}]{_eol(b.header)}"
         b.body = body
         b.archived = True
+        span = self._region_span(b.region)
+        i = next(k for k, x in enumerate(self.blocks) if x is b)
+        if span is not None and span[1] > i:
+            self._relocate(b, span[1])
 
     def restore_section(self, name: str) -> None:
-        """Uncomment an archived section (in place; true inverse of archive)."""
+        """Restore an archived section: uncomment it and raise it to the
+        bottom of its region's active group (above the first archived)."""
         b = self.block(name, archived=True)
+        span = self._region_span(b.region)
+        if span is not None:
+            target = next(k for k in range(span[0], span[1] + 1)
+                          if self.blocks[k].archived)
+            i = next(k for k, x in enumerate(self.blocks) if x is b)
+            if target != i:
+                self._relocate(b, target)
         body = []
         for line in b.body:
             if line.lstrip().startswith("#"):
@@ -163,16 +230,32 @@ class Document:
         b.archived = False
 
     def delete_section(self, name: str, archived: bool = False) -> None:
-        """Remove a section entirely (no git — this is the ini level)."""
+        """Remove a section entirely (no git — this is the ini level).
+
+        If the deleted block owns a region marker and the region still has
+        blocks, the marker is handed to the block that now starts the
+        region. If the region itself becomes empty, the marker is dropped
+        with the block: handing it to the first block of the next region
+        would leave a stale marker labelling an empty area, and it would
+        travel with that block on later moves."""
         b = self.block(name, archived)
         idx = self.blocks.index(b)
         surviving = [l for l in b.leading if _MARKER_RE.match(l.strip())]
         self.blocks.pop(idx)
-        if surviving and idx < len(self.blocks):
-            nxt = self.blocks[idx]
-            nxt.leading = surviving + nxt.leading
-        # Marker owned by a block at end of file goes away with it: it
-        # labels an area that no longer has any sections.
+        if surviving:
+            nxt = self.blocks[idx] if idx < len(self.blocks) else None
+            if nxt is not None and nxt.region == b.region:
+                pos = 1 if nxt.leading and not nxt.leading[0].strip() \
+                    else 0
+                nxt.leading[pos:pos] = surviving
+            # else: the region is now empty — the marker is dropped with
+            # the block (at end of file it simply goes away: it labelled
+            # an area that no longer has any sections).
+        elif idx == 0:
+            # The first block's region marker may live in the document
+            # header; drop it when the region no longer has any blocks.
+            self.header = [l for l in self.header
+                            if _marker_region(l) != b.region]
 
     def rename_section(self, name: str, new: str) -> None:
         b = self.block(name)
