@@ -39,7 +39,7 @@ The two sudoers rules (paste into `/etc/sudoers.d/llama-dashboard` in step 3):
 
 ```
 llama-dashboard ALL=(ALL) NOPASSWD: /bin/systemctl restart llama-server.service
-llama-dashboard ALL=(ALL) NOPASSWD: /usr/bin/git -C /ssd/llamacpp_models/models_ini pull
+llama-dashboard ALL=(ALL) NOPASSWD: /usr/bin/git -C /mnt/ssd/llamacpp_models/models_ini pull
 ```
 
 Notes:
@@ -89,14 +89,14 @@ Paste these lines and save:
 
 ```
 llama-dashboard ALL=(ALL) NOPASSWD: /bin/systemctl restart llama-server.service
-llama-dashboard ALL=(ALL) NOPASSWD: /usr/bin/git -C /ssd/llamacpp_models/models_ini pull
+llama-dashboard ALL=(ALL) NOPASSWD: /usr/bin/git -C /mnt/ssd/llamacpp_models/models_ini pull
 ```
 
 The first allows restarting only that service; the second allows `git pull` in only that directory.
 Verify with:
 ```bash
 sudo -u llama-dashboard sudo systemctl restart llama-server.service
-sudo -u llama-dashboard sudo git -C /ssd/llamacpp_models/models_ini pull
+sudo -u llama-dashboard sudo git -C /mnt/ssd/llamacpp_models/models_ini pull
 ```
 
 ## 4. Install and start the systemd unit

@@ -102,12 +102,29 @@ def _build_payload(jetson: Any) -> Dict[str, Any]:
     }
 
 
+def _jetpack_fallback() -> str:
+    """JetPack version from the nvidia-jetpack apt meta-package.
+
+    jetson-stats maps L4T->JetPack via an exact-match table, so a fresh
+    L4T point release (e.g. 39.2.1) leaves that value empty.
+    """
+    try:
+        out = subprocess.check_output(
+            ["dpkg-query", "-W", "-f", "${Version}", "nvidia-jetpack"],
+            text=True, stderr=subprocess.DEVNULL, timeout=5,
+        )
+        return out.strip().split("-b", 1)[0]
+    except Exception:
+        return ""
+
+
 def _get_board(jetson: Any) -> Dict[str, str]:
     hw = jetson.board.get("hardware", {})
     pf = jetson.board.get("platform", {})
+    jetpack = hw.get("Jetpack", "") or _jetpack_fallback()
     return {
         "model":   hw.get("Model", ""),
-        "jetpack": hw.get("Jetpack", ""),
+        "jetpack": jetpack,
         "python":  pf.get("Python", ""),
     }
 
