@@ -52,15 +52,15 @@ Notes:
 In the Tailscale admin console, enable **MagicDNS** and **HTTPS certificates**
 for the tailnet — required for Serve to provision a cert automatically.
 
-## 1. Copy files
+## 1. Deploy
+
+`/opt/llama-dashboard` IS the git working tree — there is nothing to copy:
 
 ```bash
-sudo mkdir -p /opt/llama-dashboard/static
-sudo cp app.py models_ini.py requirements.txt /opt/llama-dashboard/
-sudo cp static/index.html /opt/llama-dashboard/static/
-sudo rm -rf /opt/llama-dashboard/tests && sudo cp -r tests /opt/llama-dashboard/
-# re-run the suite on the Orin (no pytest needed):
-/usr/bin/python3 -m unittest -v tests.test_models_ini
+cd /opt/llama-dashboard && git pull
+sudo systemctl restart llama-dashboard
+# run the suite right there:
+python3 -m unittest -v tests.test_models_ini tests.test_app
 ```
 
 ## 2. Install Flask

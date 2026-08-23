@@ -324,6 +324,7 @@
       white-space: nowrap;
     }
     .mi-badge-arch { background: rgba(239,68,68,0.12); border-color: var(--crit); color: var(--crit); }
+    .mi-badge-alias { width: 100%; min-width: 0; white-space: normal; }
     .mi-actions { display: flex; gap: 0.35rem; margin-top: 0.35rem; }
     .mini-actions { display: flex; gap: 0.3rem; }
     .mini-btn {
@@ -414,9 +415,10 @@
   </div>
 
   <!-- Models (models.ini editor) -->
-  <div class="card" id="models-card">
-    <div class="card-label">models &middot; models.ini</div>
-    <div id="models-readonly" class="banner"><span id="models-readonly-why"></span></div>
+  <div id="models-readonly" class="banner"><span id="models-readonly-why"></span></div>
+  <details class="card advanced-card" id="models-card">
+    <summary class="card-label advanced-summary">models &middot; models.ini</summary>
+    <div class="advanced-body">
     <div id="models-git-line" class="shared-line"></div>
     <div id="models-table"></div>
 
@@ -435,7 +437,7 @@
     <hr class="adv-divider">
 
     <details>
-      <summary class="adv-svc-name">+ Add section</summary>
+      <summary class="adv-svc-name">Add section</summary>
       <div class="mi-add-body">
         <label class="mi-field"><span>name</span><input id="mi-add-name" class="mi-input" placeholder="My-Model"></label>
         <label class="mi-field"><span>model</span><input id="mi-add-model" class="mi-input" placeholder="/mnt/ssd/llamacpp_models/...gguf"></label>
@@ -460,7 +462,8 @@
     </details>
 
     <div id="models-op-status" class="restart-status"></div>
-  </div>
+    </div>
+  </details>
 
   <!-- Advanced controls -->
   <details class="card advanced-card">
@@ -782,7 +785,7 @@ function miRenderRow(s, i) {
       if (names.length > 1 && !s.archived) {
         var others = names.filter(function (x) { return x !== s.name; });
         var badge = document.createElement('span');
-        badge.className = 'mi-badge';
+        badge.className = 'mi-badge mi-badge-alias';
         badge.textContent = 'also: ' + others.join(', ');
         badge.setAttribute('title', 'same model as: ' + names.join(', '));
         nameEl.appendChild(badge);
