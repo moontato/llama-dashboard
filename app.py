@@ -134,7 +134,7 @@ def _jtop_thread() -> None:
                     _new_data.set()
 
         except Exception as exc:
-            print(f"[jtop-web] jtop error: {exc}; reconnecting in 5 s")
+            print(f"[llama-dashboard] jtop error: {exc}; reconnecting in 5 s")
 
         finally:
             with _lock:
