@@ -56,8 +56,11 @@ for the tailnet — required for Serve to provision a cert automatically.
 
 ```bash
 sudo mkdir -p /opt/llama-dashboard/static
-sudo cp app.py requirements.txt /opt/llama-dashboard/
+sudo cp app.py models_ini.py requirements.txt /opt/llama-dashboard/
 sudo cp static/index.html /opt/llama-dashboard/static/
+sudo rm -rf /opt/llama-dashboard/tests && sudo cp -r tests /opt/llama-dashboard/
+# re-run the suite on the Orin (no pytest needed):
+/usr/bin/python3 -m unittest -v tests.test_models_ini
 ```
 
 ## 2. Install Flask
@@ -92,11 +95,36 @@ llama-dashboard ALL=(ALL) NOPASSWD: /bin/systemctl restart llama-server.service
 llama-dashboard ALL=(ALL) NOPASSWD: /usr/bin/git -C /mnt/ssd/llamacpp_models/models_ini pull
 ```
 
-The first allows restarting only that service; the second allows `git pull` in only that directory.
-Verify with:
+The first allows restarting only that service; the second (legacy) powers the old
+"git pull" button and is replaced by the deploy-key setup below.
+
+### Enable the models.ini editor (deploy key — no more sudo for git)
+
+The dashboard edits `models.ini` inside the clone and commits/pulls/pushes as the
+service user. One-time setup:
+
 ```bash
-sudo -u llama-dashboard sudo systemctl restart llama-server.service
-sudo -u llama-dashboard sudo git -C /mnt/ssd/llamacpp_models/models_ini pull
+# 1. The clone (and everything it will write) belongs to the service user
+sudo chown -R llama-dashboard:llama-dashboard /mnt/ssd/llamacpp_models/models_ini
+
+# 2. A throwaway SSH key pair for the service user (it needs a home dir)
+sudo usermod -d /home/llama-dashboard llama-dashboard 2>/dev/null || true
+sudo -u llama-dashboard bash -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && ssh-keygen -t ed25519 -C llama-dashboard -N ""'
+sudo -u llama-dashboard cat /home/llama-dashboard/.ssh/id_ed25519.pub
+
+# 3. GitHub: model repo → Settings → Deploy keys → Add deploy key
+#    paste the public key above, tick "Allow write access"
+
+# 4. Commit identity (local to this repo only)
+sudo -u llama-dashboard git config -C /mnt/ssd/llamacpp_models/models_ini user.name "llama-dashboard"
+sudo -u llama-dashboard git config -C /mnt/ssd/llamacpp_models/models_ini user.email "llama-dashboard@localhost"
+
+# 5. Verify both directions without touching the dashboard UI
+sudo -u llama-dashboard git -C /mnt/ssd/llamacpp_models/models_ini pull --ff-only
+# (commit a no-op or a trivial edit to test push)
+
+# 6. The sudo git-pull line in /etc/sudoers.d/llama-dashboard is now legacy —
+#    remove it (keep the systemctl line).
 ```
 
 ## 4. Install and start the systemd unit

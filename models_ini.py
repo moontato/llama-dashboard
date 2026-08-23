@@ -115,12 +115,16 @@ class Document:
                 return i
         return len(self.blocks)
 
-    def add_section(self, name: str, keys: List[Tuple[str, str]]) -> None:
-        """Append a new active section at the end of the active area."""
+    def add_section(self, name: str, keys: List[Tuple[str, str]],
+                    region: str = "individual") -> None:
+        """Append a new active section at the end of ``region``'s area."""
         if any(b.name == name and not b.archived for b in self.blocks):
             raise ModelsIniError(f"section [{name}] already exists")
-        idx = self._first_archived_idx()
-        region = self.blocks[idx - 1].region if idx else "global"
+        idx = -1
+        for i, b in enumerate(self.blocks):
+            if b.region == region:
+                idx = i
+        idx = idx + 1 if idx >= 0 else self._first_archived_idx()
         block = Block(
             name=name,
             region=region,
@@ -132,10 +136,8 @@ class Document:
         self.blocks.insert(idx, block)
 
     def archive_section(self, name: str) -> None:
-        """Comment out an active section and move it to the end of file."""
+        """Comment an active section out IN PLACE (keeps position/region)."""
         b = self.block(name)
-        self.blocks.remove(b)
-        eol = _eol(b.header)
         body = []
         for line in b.body:
             core = line.strip()
@@ -143,37 +145,22 @@ class Document:
                 body.append(line)          # blanks, markers, already commented
             else:
                 body.append("# " + line)
-        archived = Block(
-            name=b.name,
-            region="archived",
-            archived=True,
-            leading=b.leading,
-            header=f"# [{name}]{eol}",
-            body=body,
-        )
-        self.blocks.append(archived)
+        b.header = f"# [{name}]{_eol(b.header)}"
+        b.body = body
+        b.archived = True
 
     def restore_section(self, name: str) -> None:
-        """Uncomment an archived section back into the active area."""
+        """Uncomment an archived section (in place; true inverse of archive)."""
         b = self.block(name, archived=True)
-        self.blocks.remove(b)
-        idx = self._first_archived_idx()
-        region = self.blocks[idx - 1].region if idx else "global"
         body = []
         for line in b.body:
-            core = line.strip()
-            if not core or _MARKER_RE.match(core):
-                continue                   # blanks / area markers dropped
-            body.append(_uncomment(line))
-        active = Block(
-            name=b.name,
-            region=region,
-            archived=False,
-            leading=["\n"] if idx else [],
-            header=f"[{name}]{_eol(b.header)}",
-            body=body,
-        )
-        self.blocks.insert(idx, active)
+            if line.lstrip().startswith("#"):
+                body.append(_uncomment(line))
+            else:
+                body.append(line)
+        b.header = f"[{b.name}]{_eol(b.header)}"
+        b.body = body
+        b.archived = False
 
     def delete_section(self, name: str, archived: bool = False) -> None:
         """Remove a section entirely (no git — this is the ini level)."""

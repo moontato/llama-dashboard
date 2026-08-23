@@ -286,6 +286,67 @@
     .restart-status.err { color: var(--crit); }
 
     .adv-divider { border: none; border-top: 1px solid var(--border); margin: 0.75rem 0; }
+
+    /* ── models.ini editor ─────────────────────────────────── */
+    .mi-input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font: inherit;
+      padding: 0.35rem 0.5rem;
+    }
+    .mi-region {
+      font-size: 0.62rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0.5rem 0 0.15rem;
+    }
+    .mi-row { border-top: 1px solid var(--border); padding: 0.45rem 0; }
+    .mi-row:first-child { border-top: none; }
+    .mi-name { font-size: 0.8rem; font-weight: 600; display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+    .mi-row.archived .mi-name { color: var(--muted); }
+    .mi-model {
+      font-size: 0.68rem;
+      color: var(--muted);
+      margin-top: 0.05rem;
+      overflow-wrap: anywhere;
+    }
+    .mi-badge {
+      font-size: 0.62rem;
+      background: rgba(99,102,241,0.15);
+      border: 1px solid var(--cpu);
+      color: var(--gpu);
+      padding: 0 0.3rem;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+    .mi-badge-arch { background: rgba(239,68,68,0.12); border-color: var(--crit); color: var(--crit); }
+    .mi-actions { display: flex; gap: 0.35rem; margin-top: 0.35rem; }
+    .mini-actions { display: flex; gap: 0.3rem; }
+    .mini-btn {
+      font-family: inherit;
+      font-size: 0.7rem;
+      padding: 0.25rem 0.55rem;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .mini-btn:hover:not(:disabled) { background: rgba(255,255,255,0.06); }
+    .mini-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .mi-warn   { border-color: var(--warn); color: var(--warn); }
+    .mi-danger { border-color: var(--crit); color: var(--crit); }
+    .mi-primary { border-color: var(--ok); color: var(--ok); }
+    .mi-field { display: block; font-size: 0.7rem; color: var(--muted); margin-bottom: 0.4rem; }
+    .mi-field span { display: block; margin-bottom: 0.2rem; }
+    .mi-param { display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.35rem; }
+    .mi-param input { flex: 1; }
+    .mi-add-body, .mi-edit-body { margin-top: 0.6rem; }
+    #models-op-status { margin-top: 0.3rem; }
   </style>
 </head>
 <body>
@@ -350,6 +411,55 @@
   <div class="card">
     <div class="card-label" id="cpu-label">CPU</div>
     <div id="cpu-strip"></div>
+  </div>
+
+  <!-- Models (models.ini editor) -->
+  <div class="card" id="models-card">
+    <div class="card-label">models &middot; models.ini</div>
+    <div id="models-readonly" class="banner"><span id="models-readonly-why"></span></div>
+    <div id="models-git-line" class="shared-line"></div>
+    <div id="models-table"></div>
+
+    <hr class="adv-divider">
+
+    <div class="adv-row" style="flex-direction:column; align-items:stretch;">
+      <input id="models-commit-msg" class="mi-input" placeholder="commit message" />
+      <div class="mini-actions" style="margin-top:0.4rem;">
+        <button id="models-commit-btn" class="mini-btn mi-primary" onclick="miCommit()">commit</button>
+        <button class="mini-btn" onclick="miGit('pull')">pull</button>
+        <button class="mini-btn" onclick="miGit('push')">push</button>
+      </div>
+    </div>
+    <div id="models-git-status" class="restart-status"></div>
+
+    <hr class="adv-divider">
+
+    <details>
+      <summary class="adv-svc-name">+ Add section</summary>
+      <div class="mi-add-body">
+        <label class="mi-field"><span>name</span><input id="mi-add-name" class="mi-input" placeholder="My-Model"></label>
+        <label class="mi-field"><span>model</span><input id="mi-add-model" class="mi-input" placeholder="/mnt/ssd/llamacpp_models/...gguf"></label>
+        <label class="mi-field"><span>params &mdash; one per line: key = value</span>
+          <textarea id="mi-add-params" class="mi-input" rows="3" placeholder="temp = 0.7&#10;ctx-size = 131072"></textarea></label>
+        <button class="mini-btn mi-primary" onclick="miAdd()">add</button>
+        <div id="mi-add-status" class="restart-status"></div>
+      </div>
+    </details>
+
+    <details id="mi-editor">
+      <summary class="adv-svc-name">Edit section</summary>
+      <div class="mi-edit-body">
+        <input type="hidden" id="mi-name">
+        <label class="mi-field"><span>section name</span><input id="mi-newname" class="mi-input"></label>
+        <label class="mi-field"><span>model</span><input id="mi-model" class="mi-input"></label>
+        <div class="mi-field"><span>params</span><div id="mi-params"></div>
+          <button class="mini-btn" onclick="miAddParam('','')">+ param</button></div>
+        <button class="mini-btn mi-primary" onclick="miSaveEdit()">save</button>
+        <div id="mi-edit-status" class="restart-status"></div>
+      </div>
+    </details>
+
+    <div id="models-op-status" class="restart-status"></div>
   </div>
 
   <!-- Advanced controls -->
@@ -629,6 +739,245 @@ function _advBtn(btnId, statusId, url, cooldownMs) {
 
 function restartLlama()  { _advBtn('restart-btn',  'restart-status',  '/api/restart-llama',    30000); }
 function gitPullModels() { _advBtn('gitpull-btn',  'gitpull-status',  '/api/git-pull-models',  30000); }
-</script>
+
+// ── models.ini editor ────────────────────────────────────────────
+var miData = null;          // last /api/models payload
+var miOriginal = null;      // {key:value} snapshot of the row being edited
+
+function miPost(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  }).then(function (r) { return r.json(); });
+}
+
+function miEl(id) { return document.getElementById(id); }
+
+function miOpStatus(id, msg, ok) {
+  var el = miEl(id);
+  el.textContent = msg;
+  el.className = 'restart-status ' + (ok ? 'ok' : 'err');
+}
+
+function miRenderRow(s, i) {
+  var row = document.createElement('div');
+  row.className = 'mi-row' + (s.archived ? ' archived' : '');
+
+  var nameEl = document.createElement('div');
+  nameEl.className = 'mi-name';
+  nameEl.appendChild(document.createTextNode(s.name));
+
+  if (s.archived) {
+    var archBadge = document.createElement('span');
+    archBadge.className = 'mi-badge mi-badge-arch';
+    archBadge.textContent = 'archived';
+    nameEl.appendChild(archBadge);
+  }
+
+  if (miData && miData.aliases) {
+    for (var m in miData.aliases) {
+      if (m !== s.model) continue;
+      var names = miData.aliases[m];
+      if (names.length > 1 && !s.archived) {
+        var others = names.filter(function (x) { return x !== s.name; });
+        var badge = document.createElement('span');
+        badge.className = 'mi-badge';
+        badge.textContent = 'also: ' + others.join(', ');
+        badge.setAttribute('title', 'same model as: ' + names.join(', '));
+        nameEl.appendChild(badge);
+      }
+      break;
+    }
+  }
+  row.appendChild(nameEl);
+
+  var modelEl = document.createElement('div');
+  modelEl.className = 'mi-model';
+  modelEl.textContent = s.model || '(no model)';
+  row.appendChild(modelEl);
+
+  var actions = document.createElement('div');
+  actions.className = 'mi-actions';
+  var mk = function (label, cls, fn) {
+    var b = document.createElement('button');
+    b.className = 'mini-btn mi-writable ' + (cls || '');
+    b.textContent = label;
+    b.onclick = fn;
+    actions.appendChild(b);
+  };
+  mk('edit', '', function () { miEdit(i); });
+  if (s.archived) {
+    mk('restore', '', function () { miAct('restore', s.name); });
+    mk('delete', 'mi-danger', function () { miAct('delete', s.name, true); });
+  } else {
+    mk('archive', 'mi-warn', function () { miAct('archive', s.name); });
+    mk('delete', 'mi-danger', function () { miAct('delete', s.name, false); });
+  }
+  row.appendChild(actions);
+  return row;
+}
+
+function miRender(d) {
+  miData = d;
+  var line = miEl('models-git-line');
+  if (d.git && d.git.ok) {
+    var bits = [d.git.branch, d.git.dirty ? 'dirty' : 'clean'];
+    if (d.git.ahead != null && d.git.ahead > 0)  bits.push(d.git.ahead + ' ahead');
+    if (d.git.behind != null && d.git.behind > 0) bits.push(d.git.behind + ' behind');
+    bits.push(d.git.last_commit);
+    line.textContent = bits.join(' · ');
+    line.style.color = '';
+  } else {
+    line.textContent = 'git: ' + (d.git && d.git.error ? d.git.error : 'unavailable');
+    line.style.color = 'var(--crit)';
+  }
+
+  var ro = !d.writable;
+  miEl('models-readonly').classList.toggle('visible', ro);
+  if (ro) miEl('models-readonly-why').textContent = 'read-only — ' + d.write_reason;
+
+  var table = miEl('models-table');
+  table.innerHTML = '';
+  var region = null;
+  d.models.forEach(function (s, i) {
+    if (s.region !== region) {
+      region = s.region;
+      var rh = document.createElement('div');
+      rh.className = 'mi-region';
+      rh.textContent = s.region;
+      table.appendChild(rh);
+    }
+    table.appendChild(miRenderRow(s, i));
+  });
+  Array.prototype.forEach.call(
+    document.querySelectorAll('#models-card .mi-writable'),
+    function (b) { b.disabled = ro; }
+  );
+}
+
+function miLoad() {
+  fetch('/api/models')
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.models) miRender(d);
+    })
+    .catch(function () {
+      miEl('models-git-line').textContent = 'models: load failed';
+      miEl('models-git-line').style.color = 'var(--crit)';
+    });
+}
+
+function miAct(action, name, isArchived) {
+  var verb = action === 'delete' ? 'permanently delete' : action;
+  if (!confirm('[' + name + '] — ' + verb + '?')) return;
+  var body = action === 'delete' ? { name: name, archived: !!isArchived } : { name: name };
+  miOpStatus('models-op-status', 'working…', true);
+  miPost('/api/models/section/' + action, body).then(function (d) {
+    miOpStatus('models-op-status', d.ok ? '' : d.error, !!d.ok);
+    if (d.ok) miLoad();
+  });
+}
+
+function miCommit() {
+  miGit('commit');
+}
+
+function miGit(action) {
+  var msg = miEl('models-commit-msg').value;
+  miOpStatus('models-git-status', 'working…', true);
+  miPost('/api/models/git', { action: action, message: msg }).then(function (d) {
+    miOpStatus('models-git-status',
+               d.ok ? (d.commit || (d.output || 'done').split('\n').pop()) : d.error,
+               !!d.ok);
+    if (d.ok) miLoad();
+  });
+}
+
+function miParamRow(key, value) {
+  var row = document.createElement('div');
+  row.className = 'mi-param';
+  var k = document.createElement('input'); k.className = 'mi-k mi-input'; k.value = key;
+  var v = document.createElement('input'); v.className = 'mi-v mi-input'; v.value = value;
+  var del = document.createElement('button');
+  del.className = 'mini-btn mi-danger';
+  del.textContent = '✕';
+  del.onclick = function () { row.remove(); };
+  row.appendChild(k); row.appendChild(v); row.appendChild(del);
+  return row;
+}
+
+function miAddParam(key, value) {
+  miEl('mi-params').appendChild(miParamRow(key, value));
+}
+
+function miEdit(i) {
+  var s = miData.models[i];
+  miEl('mi-name').value = s.name;
+  miEl('mi-newname').value = s.name;
+  miEl('mi-model').value = s.model || '';
+  var box = miEl('mi-params');
+  box.innerHTML = '';
+  miOriginal = {};
+  s.keys.forEach(function (kv) {
+    if (kv.key === 'model') { miOriginal.model = kv.value; return; }
+    miOriginal[kv.key] = kv.value;
+    box.appendChild(miParamRow(kv.key, kv.value));
+  });
+  miOpStatus('mi-edit-status', '', true);
+  var ed = miEl('mi-editor');
+  ed.open = true;
+  ed.scrollIntoView({ block: 'nearest' });
+}
+
+function miSaveEdit() {
+  var name = miEl('mi-name').value.trim();
+  var set = {};
+  var model = miEl('mi-model').value.trim();
+  if (model && miOriginal.model !== model) set.model = model;
+  miEl('mi-params').querySelectorAll('.mi-param').forEach(function (row) {
+    var k = row.querySelector('.mi-k').value.trim();
+    var v = row.querySelector('.mi-v').value.trim();
+    if (!k) return;
+    set[k] = v;
+  });
+  var remove = [];
+  Object.keys(miOriginal).forEach(function (k) {
+    if (k !== 'model' && !(k in set)) remove.push(k);
+  });
+  var body = { name: name, set: set, remove: remove };
+  var nn = miEl('mi-newname').value.trim();
+  if (nn && nn !== name) body.new_name = nn;
+  miOpStatus('mi-edit-status', 'saving…', true);
+  miPost('/api/models/section/edit', body).then(function (d) {
+    miOpStatus('mi-edit-status', d.ok ? 'saved' : d.error, !!d.ok);
+    if (d.ok) { miEl('mi-editor').open = false; miLoad(); }
+  });
+}
+
+function miAdd() {
+  var name  = miEl('mi-add-name').value.trim();
+  var model = miEl('mi-add-model').value.trim();
+  var params = {};
+  miEl('mi-add-params').value.split('\n').forEach(function (line) {
+    line = line.trim();
+    if (!line) return;
+    var idx = line.indexOf('=');
+    if (idx <= 0) return;
+    params[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+  });
+  miOpStatus('mi-add-status', 'adding…', true);
+  miPost('/api/models/section/add', { name: name, model: model, params: params }).then(function (d) {
+    miOpStatus('mi-add-status', d.ok ? 'added' : d.error, !!d.ok);
+    if (d.ok) {
+      miEl('mi-add-name').value = '';
+      miEl('mi-add-model').value = '';
+      miEl('mi-add-params').value = '';
+      miLoad();
+    }
+  });
+}
+
+miLoad();</script>
 </body>
 </html>

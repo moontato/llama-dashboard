@@ -136,6 +136,11 @@ class Sections(unittest.TestCase):
         self.doc.add_section("Test-Model", [("model", "/mnt/ssd/x.gguf"), ("temp", "0.7")])
         b = self.doc.block("Test-Model")
         self.assertFalse(b.archived)
+        self.assertEqual(b.region, "individual")
+        # inserted at the end of the individual area (after its last block)
+        last_individual = max(i for i, x in enumerate(self.doc.blocks)
+                               if x.region == "individual" and x.name != "Test-Model")
+        self.assertEqual(self.doc.blocks.index(b), last_individual + 1)
         first_archived = next(i for i, x in enumerate(self.doc.blocks) if x.archived)
         self.assertLess(self.doc.blocks.index(b), first_archived)
         text = self.doc.render()
@@ -147,16 +152,29 @@ class Sections(unittest.TestCase):
         b2 = parse(TEXT)
         self.assertNotIn("Test-Model", [x.name for x in b2.blocks])
 
+    def test_add_section_region_profiles(self):
+        self.doc.add_section("New-Profile", [("model", "/x.gguf")],
+                             region="profiles")
+        b = self.doc.block("New-Profile")
+        idx = self.doc.blocks.index(b)
+        self.assertEqual(b.region, "profiles")
+        self.assertEqual(self.doc.blocks[idx - 1].region, "profiles")
+        self.assertEqual(self.doc.blocks[idx + 1].region, "individual")
+        self.assertEqual(parse(self.doc.render()).render(), self.doc.render())
+
     def test_add_section_collision(self):
         with self.assertRaises(ModelsIniError):
             self.doc.add_section("Qwen3.5-4B", [("model", "x")])
 
     def test_archive(self):
+        idx = self.doc.blocks.index(self.doc.block("Qwen3.8-27B-low"))
         self.doc.archive_section("Qwen3.8-27B-low")
         with self.assertRaises(ModelsIniError):
             self.doc.block("Qwen3.8-27B-low")
         b = self.doc.block("Qwen3.8-27B-low", archived=True)
-        self.assertEqual(b.region, "archived")
+        # in place: same index, same region (does NOT move to ARCHIVED)
+        self.assertEqual(self.doc.blocks.index(b), idx)
+        self.assertEqual(b.region, "individual")
         text = self.doc.render()
         self.assertNotIn("\n[Qwen3.8-27B-low]\n", text)
         self.assertIn("# [Qwen3.8-27B-low]\n", text)
@@ -165,16 +183,20 @@ class Sections(unittest.TestCase):
             s = line.strip()
             if s:
                 self.assertTrue(s.startswith("#"), line)
-        # marker intact
+        # marker intact, section still sits above it
         self.assertEqual(text.count("# == ARCHIVED =="), 1)
+        self.assertLess(text.index("# [Qwen3.8-27B-low]"),
+                         text.index("# == ARCHIVED =="))
         self.assertEqual(parse(text).render(), text)
 
-    def test_restore_after_archive_is_noop_on_order(self):
-        # last active block: archive then restore must reproduce original
-        # exactly (placement lands at its original index)
-        self.doc.archive_section("Qwen3-Coder-Next")
-        self.doc.restore_section("Qwen3-Coder-Next")
-        self.assertEqual(self.doc.render(), TEXT)
+    def test_restore_after_archive_is_byte_noop(self):
+        # archive+restore is the exact inverse for any active section
+        for name in ("Qwen3-Coder-Next", "Qwen3.8-27B-low", "General-Bot-small"):
+            with self.subTest(name=name):
+                doc = parse(TEXT)
+                doc.archive_section(name)
+                doc.restore_section(name)
+                self.assertEqual(doc.render(), TEXT)
 
     def test_restore(self):
         doc = parse(TEXT)

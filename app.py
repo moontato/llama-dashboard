@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from collections import deque
 from typing import Any, Dict, List, Optional
 
-from flask import Flask, Response, jsonify, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
+
+from models_ini import ModelsIniError, parse
 
 # ─────────────────────── Thresholds (tune here) ──────────────────
 RAM_WARN_PCT  = 85.0
@@ -264,6 +269,293 @@ def git_pull_models() -> Response:
         return jsonify({"ok": False, "error": "git pull timed out after 60 s"}), 500
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+# ─────────────────── models.ini editing (git-backed) ─────────────
+
+def _ini_file() -> str:
+    """Path of the live models.ini (env overrides for tests)."""
+    f = os.environ.get("MODELS_INI_FILE")
+    if f:
+        return f
+    d = os.environ.get("MODELS_INI_DIR")
+    if d:
+        return os.path.join(d, "models.ini")
+    return (MODELS_INI_PATH if os.path.isfile(MODELS_INI_PATH)
+            else os.path.join(MODELS_INI_PATH, "models.ini"))
+
+
+def _ini_dir() -> str:
+    """Git worktree containing the ini file (resolves file-named layouts)."""
+    d = os.environ.get("MODELS_INI_DIR")
+    if d:
+        return d
+    fallback = os.path.dirname(_ini_file()) or "."
+    seen = set()
+    for cand in (fallback, MODELS_INI_PATH):
+        if cand in seen:
+            continue
+        seen.add(cand)
+        r = subprocess.run(["git", "-C", cand, "rev-parse",
+                            "--is-inside-work-tree"],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            return cand
+    return fallback
+
+
+_models_gate = {"ok": False, "reason": "not checked"}
+
+
+def _refresh_models_gate() -> None:
+    """Byte-verify the live file round-trips through our parser."""
+    try:
+        with open(_ini_file(), "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        _models_gate.update(ok=False, reason="cannot read models.ini")
+        return
+    try:
+        doc = parse(text)
+        if doc.render() != text:
+            _models_gate.update(ok=False, reason="byte round-trip failed")
+        elif not doc.blocks:
+            _models_gate.update(ok=False, reason="no sections found")
+        else:
+            _models_gate.update(ok=True, reason="")
+    except Exception:
+        _models_gate.update(ok=False, reason="parse error")
+
+
+def _load_doc():
+    with open(_ini_file(), "r", encoding="utf-8") as fh:
+        text = fh.read()
+    return text, parse(text)
+
+
+def _save_doc(doc) -> None:
+    text = doc.render()
+    if parse(text).render() != text:
+        raise ModelsIniError("internal render check failed; file not written")
+    f = _ini_file()
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(f) or ".",
+                                prefix="." + os.path.basename(f) + ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, f)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def _valid_name(name: str) -> bool:
+    return bool(re.fullmatch(r"[^\s\[\]=]+", name))
+
+
+def _guard_write():
+    """503 response when writes are gated, else None."""
+    _refresh_models_gate()
+    if not _models_gate["ok"]:
+        return jsonify({"ok": False,
+                        "error": "models.ini read-only: " + _models_gate["reason"]}), 503
+    return None
+
+
+def _mutate(fn):
+    """Apply fn(doc) to fresh parse, self-check, write atomically."""
+    try:
+        _text, doc = _load_doc()
+        fn(doc)
+        _save_doc(doc)
+        return jsonify({"ok": True}), 200
+    except ModelsIniError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"edit failed: {exc}"}), 500
+
+
+def _section_view(b) -> Dict[str, Any]:
+    keys = []
+    model = ""
+    for k, v in b.keys():
+        keys.append({"key": k, "value": v})
+        if k == "model":
+            model = v
+    return {"name": b.name, "region": b.region, "archived": b.archived,
+            "model": model, "keys": keys}
+
+
+def _git(*args, timeout: int = 60):
+    try:
+        r = subprocess.run(["git", "-C", _ini_dir(), *args],
+                           capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+    except FileNotFoundError:
+        return 127, "", "git not available"
+    except subprocess.TimeoutExpired:
+        return 124, "", "git timed out"
+
+
+def _git_status() -> Dict[str, Any]:
+    fname = os.path.basename(_ini_file())
+    code, out, err = _git("rev-parse", "--abbrev-ref", "HEAD")
+    if code != 0:
+        return {"ok": False, "error": err or out}
+    info = {"ok": True, "branch": out}
+    code, out, _ = _git("status", "--porcelain", "--", fname)
+    info["dirty"] = bool(out)
+    code, out, _ = _git("rev-list", "--count", f"origin/{out}..HEAD")
+    info["ahead"] = int(out) if code == 0 else None
+    code, out, _ = _git("rev-list", "--count", f"HEAD..origin/{out}")
+    info["behind"] = int(out) if code == 0 else None
+    code, out, _ = _git("log", "-1", "--format=%h %s")
+    info["last_commit"] = out or "(none)"
+    return info
+
+
+@app.route("/api/models", methods=["GET"])
+def api_models() -> Response:
+    _refresh_models_gate()
+    try:
+        _text, doc = _load_doc()
+        git = _git_status()
+    except FileNotFoundError:
+        return jsonify({"ok": False, "error": "models.ini not found"}), 404
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    return jsonify({
+        "ok": True,
+        "writable": _models_gate["ok"],
+        "write_reason": _models_gate["reason"],
+        "models": [_section_view(b) for b in doc.blocks],
+        "aliases": doc.group_aliases(),
+        "git": git,
+    })
+
+
+@app.route("/api/models/section/add", methods=["POST"])
+def api_models_add() -> Response:
+    guard = _guard_write()
+    if guard:
+        return guard
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name", "")).strip()
+    model = str(data.get("model", "")).strip()
+    params = data.get("params") or {}
+    region = str(data.get("region", "individual")).strip()
+    if region not in ("profiles", "individual"):
+        return jsonify({"ok": False, "error": "region must be profiles or individual"}), 400
+    if not _valid_name(name):
+        return jsonify({"ok": False, "error": "invalid section name"}), 400
+    if not model:
+        return jsonify({"ok": False, "error": "model is required"}), 400
+    keys = [("model", model)]
+    for k, v in params.items():
+        k = str(k).strip()
+        v = str(v)
+        if not k or "=" in k or any(c in v for c in "\r\n"):
+            return jsonify({"ok": False, "error": f"invalid parameter {k!r}"}), 400
+        keys.append((k, v))
+    return _mutate(lambda doc: doc.add_section(name, keys, region=region))
+
+
+@app.route("/api/models/section/edit", methods=["POST"])
+def api_models_edit() -> Response:
+    guard = _guard_write()
+    if guard:
+        return guard
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name", "")).strip()
+    new_name = str(data.get("new_name", "")).strip()
+    remove = [str(k) for k in (data.get("remove") or [])]
+    sets: Dict[str, str] = {}
+    for k, v in (data.get("set") or {}).items():
+        k, v = str(k).strip(), str(v)
+        if not k or "=" in k or any(c in v for c in "\r\n"):
+            return jsonify({"ok": False, "error": f"invalid key {k!r}"}), 400
+        sets[k] = v
+
+    def fn(doc):
+        cur = name
+        if new_name and new_name != name:
+            doc.rename_section(name, new_name)
+            cur = new_name
+        for k in remove:
+            if k not in sets:
+                try:
+                    doc.remove_key(cur, k)
+                except ModelsIniError:
+                    pass        # key absence on remove is not an error
+        for k, v in sets.items():
+            doc.upsert_key(cur, k, v)
+
+    return _mutate(fn)
+
+
+@app.route("/api/models/section/archive", methods=["POST"])
+def api_models_archive() -> Response:
+    guard = _guard_write()
+    if guard:
+        return guard
+    name = str((request.get_json(silent=True) or {}).get("name", "")).strip()
+    return _mutate(lambda doc: doc.archive_section(name))
+
+
+@app.route("/api/models/section/restore", methods=["POST"])
+def api_models_restore() -> Response:
+    guard = _guard_write()
+    if guard:
+        return guard
+    name = str((request.get_json(silent=True) or {}).get("name", "")).strip()
+    return _mutate(lambda doc: doc.restore_section(name))
+
+
+@app.route("/api/models/section/delete", methods=["POST"])
+def api_models_delete() -> Response:
+    guard = _guard_write()
+    if guard:
+        return guard
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name", "")).strip()
+    archived = bool(data.get("archived", False))
+    return _mutate(lambda doc: doc.delete_section(name, archived=archived))
+
+
+@app.route("/api/models/git", methods=["POST"])
+def api_models_git() -> Response:
+    data = request.get_json(silent=True) or {}
+    action = data.get("action")
+    if action not in ("commit", "pull", "push"):
+        return jsonify({"ok": False, "error": f"unknown action {action!r}"}), 400
+    fname = os.path.basename(_ini_file())
+    code, branch, _err = _git("rev-parse", "--abbrev-ref", "HEAD")
+    if code != 0:
+        return jsonify({"ok": False, "error": "not a git repository"}), 500
+
+    if action == "commit":
+        msg = str(data.get("message", "")).strip() or "models.ini"
+        code, out, _ = _git("status", "--porcelain", "--", fname)
+        if not out:
+            return jsonify({"ok": False, "error": "no changes to commit"}), 400
+        for args in (["add", fname], ["commit", "-m", msg]):
+            code, _out, err = _git(*args)
+            if code != 0:
+                return jsonify({"ok": False, "error": err or "git failed"}), 500
+        code, out, _ = _git("log", "-1", "--format=%h %s")
+        return jsonify({"ok": True, "commit": out})
+    if action == "pull":
+        code, out, err = _git("pull", "--ff-only", "origin", branch, timeout=120)
+        text = out or err
+        return (jsonify({"ok": True, "output": text}), 200) if code == 0 else \
+               (jsonify({"ok": False, "error": text, "output": text}), 500)
+    if action == "push":
+        code, out, err = _git("push", "origin", branch, timeout=120)
+        text = out or err
+        return (jsonify({"ok": True, "output": text}), 200) if code == 0 else \
+               (jsonify({"ok": False, "error": text, "output": text}), 500)
 
 
 # ─────────────────────── Entry point ─────────────────────────────
