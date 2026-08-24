@@ -1037,13 +1037,18 @@ function miCommit() {
 }
 
 function miGit(action) {
-  var msg = miEl('models-commit-msg').value;
+  var input = miEl('models-commit-msg');
+  var msg = input.value;
   miOpStatus('models-git-status', 'working…', true);
   miPost('/api/models/git', { action: action, message: msg }).then(function (d) {
     miOpStatus('models-git-status',
                d.ok ? (d.commit || (d.output || 'done').split('\n').pop()) : d.error,
                !!d.ok);
     if (d.ok) miLoad();
+    if (d.ok && action === 'commit') {
+      input.value = '';
+      input.focus();
+    }
   });
 }
 
