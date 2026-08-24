@@ -74,6 +74,30 @@ class ApiTestCase(unittest.TestCase):
         # git: tmp dir is not a repository -> graceful error object
         self.assertFalse(d["git"]["ok"])
 
+    def test_backup_download(self):
+        import re
+        r = self.client.get("/api/models/backup")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.mimetype, "text/plain")
+        disp = r.headers.get("Content-Disposition", "")
+        self.assertTrue(disp.startswith("attachment;"))
+        m = re.search(r'filename="models-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})\.ini"',
+                      disp)
+        self.assertIsNotNone(m, disp)
+        # byte-for-byte copy of the live file
+        self.assertEqual(r.data, ORIGINAL.encode("utf-8"))
+
+    def test_backup_follows_file_changes(self):
+        marker = ORIGINAL + "\n; backup-test\n"
+        Path(self.tmp, "models.ini").write_text(marker, encoding="utf-8")
+        r = self.client.get("/api/models/backup")
+        self.assertEqual(r.data, marker.encode("utf-8"))
+
+    def test_backup_missing_file(self):
+        Path(self.tmp, "models.ini").unlink()
+        r = self.client.get("/api/models/backup")
+        self.assertEqual(r.status_code, 404)
+
     def test_gate_blocks_on_junk_and_recovers(self):
         junk = Path(self.tmp) / "models.ini"
         junk.write_text("hello\n", encoding="utf-8")
@@ -183,6 +207,75 @@ class ApiTestCase(unittest.TestCase):
         code, d = self.post("/api/models/section/archive",
                             {"name": "no-such"})
         self.assertEqual(code, 400)
+
+    def test_move_within_region(self):
+        code, d = self.post("/api/models/section/move", {
+            "name": "gemma-4-31B-Code",
+            "target": "gemma-4-26B",
+            "position": "after",
+        })
+        self.assertEqual(code, 200)
+        self.assertTrue(d["ok"])
+        self.assert_roundtrip()
+        names = [s["name"] for s in self.get()[1]["models"]]
+        self.assertEqual(names.index("gemma-4-31B-Code"),
+                         names.index("gemma-4-26B") + 1)
+
+    def test_move_region_head(self):
+        # moving the region head down must keep the file parseable with
+        # the marker on the new head
+        code, d = self.post("/api/models/section/move", {
+            "name": "General-Bot-small",
+            "target": "Reasoning-Bot",
+            "position": "after",
+        })
+        self.assertEqual(code, 200)
+        self.assert_roundtrip()
+        code, d = self.get()
+        s = self._section(d, "General-Bot-small")
+        self.assertEqual(s["region"], "profiles")
+        names = [x["name"] for x in d["models"]]
+        self.assertEqual(names.index("General-Bot-small"),
+                         names.index("Reasoning-Bot") + 1)
+
+    def test_move_noop_keeps_file_untouched(self):
+        before = self.read_file()
+        code, d = self.post("/api/models/section/move", {
+            "name": "gemma-4-31B-Code",
+            "target": "gemma-4-26B",
+            "position": "before",
+        })
+        self.assertEqual(code, 200)
+        self.assertEqual(self.read_file(), before)
+
+    def test_move_rejected_cross_region_and_bad_args(self):
+        for body in (
+            {"name": "Qwen3.5-4B", "target": "General-Bot-small",
+             "position": "after"},
+            {"name": "Qwen3.5-4B", "target": "gemma-4-31B", "position": "sideways"},
+            {"name": "no-such", "target": "gemma-4-31B", "position": "after"},
+            {"name": "bad name", "target": "gemma-4-31B", "position": "after"},
+        ):
+            with self.subTest(body=body):
+                code, d = self.post("/api/models/section/move", body)
+                self.assertEqual(code, 400)
+        self.assertEqual(self.read_file(), ORIGINAL)
+
+    def test_move_archived(self):
+        code, d = self.post("/api/models/section/move", {
+            "name": "Muse-Glimmer-30B",
+            "target": "gemma-4-31B-Instruct",
+            "position": "after",
+            "archived": True,
+        })
+        self.assertEqual(code, 200)
+        self.assert_roundtrip()
+        code, d = self.get()
+        s = self._section(d, "Muse-Glimmer-30B")
+        self.assertEqual(s["region"], "archived_models")
+        names = [x["name"] for x in d["models"]]
+        self.assertEqual(names.index("Muse-Glimmer-30B"),
+                         names.index("gemma-4-31B-Instruct") + 1)
 
     # ── git endpoints ────────────────────────────────────────
 

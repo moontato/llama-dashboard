@@ -436,6 +436,23 @@ def api_models() -> Response:
     })
 
 
+@app.route("/api/models/backup", methods=["GET"])
+def api_models_backup() -> Response:
+    """Download a byte-for-byte copy of the live models.ini."""
+    f = _ini_file()
+    if not os.path.isfile(f):
+        return jsonify({"ok": False, "error": "models.ini not found"}), 404
+    with open(f, "rb") as fh:
+        data = fh.read()
+    stamp = time.strftime("%Y-%m-%dT%H-%M-%S")
+    return Response(
+        data,
+        mimetype="text/plain; charset=utf-8",
+        headers={"Content-Disposition":
+                 f'attachment; filename="models-{stamp}.ini"'},
+    )
+
+
 @app.route("/api/models/section/add", methods=["POST"])
 def api_models_add() -> Response:
     guard = _guard_write()
@@ -511,6 +528,26 @@ def api_models_restore() -> Response:
         return guard
     name = str((request.get_json(silent=True) or {}).get("name", "")).strip()
     return _mutate(lambda doc: doc.restore_section(name))
+
+
+@app.route("/api/models/section/move", methods=["POST"])
+def api_models_move() -> Response:
+    guard = _guard_write()
+    if guard:
+        return guard
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name", "")).strip()
+    target = str(data.get("target", "")).strip()
+    position = str(data.get("position", "")).strip()
+    archived = bool(data.get("archived", False))
+    if not _valid_name(name) or not _valid_name(target):
+        return jsonify({"ok": False, "error": "invalid section name"}), 400
+    if position not in ("before", "after"):
+        return jsonify(
+            {"ok": False, "error": "position must be 'before' or 'after'"}
+        ), 400
+    return _mutate(lambda doc: doc.move_section(
+        name, target, position, archived=archived))
 
 
 @app.route("/api/models/section/delete", methods=["POST"])

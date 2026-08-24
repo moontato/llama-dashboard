@@ -483,5 +483,185 @@ class Sections(unittest.TestCase):
             self.doc.archive_section("no-such-section")
 
 
+# PROFILES region sits at the top of the file, so its marker lives in
+# the document header; two-block regions exercise every head-change path.
+TINY = (
+    "# == PROFILES ==\n"
+    "\n"
+    "[Alpha]\n"
+    "model = /x/a.gguf\n"
+    "\n"
+    "[Beta]\n"
+    "model = /x/b.gguf\n"
+    "\n"
+    "# == ARCHIVED PROFILES ==\n"
+    "\n"
+    "# == MODELS ==\n"
+    "\n"
+    "[Solo]\n"
+    "model = /x/s.gguf\n"
+    "\n"
+    "# == ARCHIVED MODELS ==\n"
+    "\n"
+)
+
+
+class MoveSection(unittest.TestCase):
+    def setUp(self):
+        self.doc = parse(TEXT)
+
+    def _names(self):
+        return [b.name for b in self.doc.blocks]
+
+    def _stable(self):
+        text = self.doc.render()
+        self.assertEqual(parse(text).render(), text)
+        for m in ("# == PROFILES ==", "# == ARCHIVED PROFILES ==",
+                  "# == MODELS ==", "# == ARCHIVED MODELS =="):
+            self.assertEqual(text.count(m), 1)
+        return text
+
+    def test_move_middle_block_down(self):
+        self.doc.move_section("gemma-4-31B-Code", "gemma-4-26B", "after")
+        names = self._names()
+        self.assertLess(names.index("gemma-4-26B"),
+                        names.index("gemma-4-31B-Code"))
+        self.assertEqual(names.index("gemma-4-31B-Code"),
+                         names.index("gemma-4-26B") + 1)
+        text = self._stable()
+        reparsed = parse(text)
+        self.assertEqual(reparsed.block("gemma-4-31B-Code").region, "models")
+        self.assertEqual(reparsed.block("gemma-4-26B").region, "models")
+
+    def test_move_middle_block_up(self):
+        self.doc.move_section("gemma-4-26B", "gemma-4-31B", "before")
+        names = self._names()
+        self.assertEqual(names.index("gemma-4-26B"),
+                         names.index("gemma-4-31B") - 1)
+        text = self._stable()
+        self.assertEqual(parse(text).block("gemma-4-26B").region, "models")
+
+    def test_move_noop_current_slot(self):
+        # gemma-4-31B-Code already sits directly before gemma-4-26B
+        self.doc.move_section("gemma-4-31B-Code", "gemma-4-26B", "before")
+        self.assertEqual(self.doc.render(), TEXT)
+        self.doc2 = parse(TEXT)
+        self.doc2.move_section("gemma-4-26B", "gemma-4-31B-Code", "after")
+        self.assertEqual(self.doc2.render(), TEXT)
+
+    def test_move_self_noop(self):
+        self.doc.move_section("Qwen3.5-4B", "Qwen3.5-4B", "after")
+        self.assertEqual(self.doc.render(), TEXT)
+
+    def test_move_region_head_marker_handoff(self):
+        # General-Bot-small owns the PROFILES marker; moving it off the
+        # top hands the marker to General-Bot-large, and the doc comments
+        # above the section travel with it
+        self.doc.move_section("General-Bot-small", "Reasoning-Bot", "after")
+        text = self._stable()
+        names = self._names()
+        self.assertEqual(names.index("General-Bot-small"),
+                         names.index("Reasoning-Bot") + 1)
+        reparsed = parse(text)
+        gbl = reparsed.block("General-Bot-large")
+        self.assertEqual(gbl.region, "profiles")
+        self.assertEqual(gbl.leading[1], "# == PROFILES ==\n")
+        gbs = reparsed.block("General-Bot-small")
+        self.assertEqual(gbs.region, "profiles")
+        self.assertNotIn("# == PROFILES ==\n", gbs.leading)
+        cmt = "; this will be used as the default config for that model"
+        self.assertLess(text.index("[Reasoning-Bot]"), text.index(cmt))
+        self.assertLess(text.index(cmt), text.index("[General-Bot-small]"))
+
+    def test_move_before_head_takes_marker(self):
+        # gemma-4-31B-Code jumps ahead of the region head and must take
+        # the MODELS marker with it
+        self.doc.move_section("gemma-4-31B-Code", "gemma-4-31B", "before")
+        text = self._stable()
+        reparsed = parse(text)
+        gc = reparsed.block("gemma-4-31B-Code")
+        self.assertEqual(gc.region, "models")
+        self.assertEqual(gc.leading[1], "# == MODELS ==\n")
+        g31 = reparsed.block("gemma-4-31B")
+        self.assertEqual(g31.region, "models")
+        self.assertNotIn("# == MODELS ==\n", g31.leading)
+        names = [b.name for b in reparsed.blocks]
+        self.assertEqual(names.index("gemma-4-31B-Code"),
+                         names.index("gemma-4-31B") - 1)
+
+    def test_move_archived_head_marker_handoff(self):
+        # Muse-Glimmer-30B owns the ARCHIVED MODELS marker; moving it
+        # down hands the marker to gemma-4-31B-Instruct
+        self.doc.move_section("Muse-Glimmer-30B", "gemma-4-31B-Instruct",
+                              "after", archived=True)
+        text = self._stable()
+        reparsed = parse(text)
+        gi = reparsed.block("gemma-4-31B-Instruct", archived=True)
+        self.assertEqual(gi.region, "archived_models")
+        self.assertEqual(gi.leading[1], "# == ARCHIVED MODELS ==\n")
+        mg = reparsed.block("Muse-Glimmer-30B", archived=True)
+        self.assertEqual(mg.region, "archived_models")
+        names = [b.name for b in reparsed.blocks]
+        self.assertEqual(names.index("Muse-Glimmer-30B"),
+                         names.index("gemma-4-31B-Instruct") + 1)
+
+    def test_move_first_region_header_marker(self):
+        # marker lives in the document header; Beta moves to the top and
+        # takes it, Alpha (formerly first) gains a seam blank
+        doc = parse(TINY)
+        doc.move_section("Beta", "Alpha", "before")
+        text = doc.render()
+        self.assertEqual(text.count("# == PROFILES =="), 1)
+        self.assertFalse(text.startswith("\n"))
+        reparsed = parse(text)
+        self.assertEqual(reparsed.block("Beta").region, "profiles")
+        self.assertEqual(reparsed.block("Alpha").region, "profiles")
+        self.assertEqual(reparsed.block("Solo").region, "models")
+        # a file-first block never owns the marker: it stays in the header
+        self.assertIn("# == PROFILES ==\n", reparsed.header)
+        self.assertEqual(reparsed.block("Beta").leading, [])
+        self.assertEqual(reparsed.block("Alpha").leading[0], "\n")
+        self.assertEqual(parse(text).render(), text)
+
+    def test_move_two_block_swap_header_marker(self):
+        # "Alpha after Beta" in a two-block top region: Beta becomes the
+        # head, taking the marker out of the document header
+        doc = parse(TINY)
+        doc.move_section("Alpha", "Beta", "after")
+        text = doc.render()
+        self.assertEqual(text.count("# == PROFILES =="), 1)
+        self.assertFalse(text.startswith("\n"))
+        reparsed = parse(text)
+        # a file-first block never owns the marker: it stays in the header
+        self.assertIn("# == PROFILES ==\n", reparsed.header)
+        self.assertEqual(reparsed.block("Beta").leading, [])
+        self.assertEqual(reparsed.block("Beta").region, "profiles")
+        self.assertEqual(reparsed.block("Alpha").region, "profiles")
+        names = [b.name for b in reparsed.blocks]
+        self.assertEqual(names.index("Alpha"), names.index("Beta") + 1)
+        self.assertEqual(parse(text).render(), text)
+
+    def test_move_two_block_noop(self):
+        doc = parse(TINY)
+        doc.move_section("Beta", "Alpha", "after")     # already there
+        self.assertEqual(doc.render(), TINY)
+
+    def test_move_cross_region_rejected(self):
+        with self.assertRaises(ModelsIniError):
+            self.doc.move_section("Qwen3.5-4B", "General-Bot-small",
+                                  "after")
+        with self.assertRaises(ModelsIniError):
+            self.doc.move_section("General-Bot-small", "Qwen3.5-4B",
+                                  "before")
+
+    def test_move_invalid_args(self):
+        with self.assertRaises(ModelsIniError):
+            self.doc.move_section("Qwen3.5-4B", "gemma-4-31B", "above")
+        with self.assertRaises(ModelsIniError):
+            self.doc.move_section("no-such", "gemma-4-31B", "after")
+        with self.assertRaises(ModelsIniError):
+            self.doc.move_section("Qwen3.5-4B", "no-such", "after")
+
+
 if __name__ == "__main__":
     unittest.main()

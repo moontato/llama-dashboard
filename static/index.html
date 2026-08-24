@@ -304,8 +304,30 @@
       color: var(--muted);
       margin: 0.5rem 0 0.15rem;
     }
-    .mi-row { border-top: 1px solid var(--border); padding: 0.45rem 0; }
+    .mi-row { border-top: 1px solid var(--border); padding: 0.45rem 0; display: flex; gap: 0.45rem; }
     .mi-row:first-child { border-top: none; }
+    .mi-cell { flex: 1; min-width: 0; }
+    .mi-drag {
+      display: flex; flex-direction: column; align-items: center; gap: 1px;
+      flex: 0 0 auto; padding-top: 0.15rem; user-select: none;
+    }
+    .mi-grip {
+      font-size: 0.8rem; line-height: 1; color: var(--muted);
+      opacity: 0.5; cursor: grab; letter-spacing: -2px;
+      padding: 0.1rem 0.15rem; border-radius: 3px;
+    }
+    .mi-grip:hover { opacity: 1; background: rgba(255,255,255,0.06); }
+    .mi-row.mi-dragging { opacity: 0.35; }
+    .mi-row.drop-before { box-shadow: inset 0 2px 0 0 var(--ok); }
+    .mi-row.drop-after  { box-shadow: inset 0 -2px 0 0 var(--ok); }
+    .mi-step {
+      font-family: inherit; font-size: 0.62rem; line-height: 1;
+      color: var(--muted); background: none; border: none;
+      padding: 0.08rem 0.25rem; cursor: pointer; border-radius: 3px;
+    }
+    .mi-step:hover:not(:disabled) { color: var(--text); background: rgba(255,255,255,0.07); }
+    .mi-step:disabled { opacity: 0.25; cursor: not-allowed; }
+    a.mini-btn { text-decoration: none; }
     .mi-name { font-size: 0.8rem; font-weight: 600; display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
     .mi-row.archived .mi-name { color: var(--muted); }
     .mi-model {
@@ -430,6 +452,7 @@
         <button id="models-commit-btn" class="mini-btn mi-primary" onclick="miCommit()">commit</button>
         <button class="mini-btn" onclick="miGit('pull')">pull</button>
         <button class="mini-btn" onclick="miGit('push')">push</button>
+        <a class="mini-btn" href="/api/models/backup">backup</a>
       </div>
     </div>
     <div id="models-git-status" class="restart-status"></div>
@@ -771,9 +794,14 @@ function miOpStatus(id, msg, ok) {
   el.className = 'restart-status ' + (ok ? 'ok' : 'err');
 }
 
-function miRenderRow(s, i) {
+function miRenderRow(s, i, reorder, ro) {
   var row = document.createElement('div');
   row.className = 'mi-row' + (s.archived ? ' archived' : '');
+  row.dataset.region = s.region;
+  row.dataset.name = s.name;
+
+  var cell = document.createElement('div');
+  cell.className = 'mi-cell';
 
   var nameEl = document.createElement('div');
   nameEl.className = 'mi-name';
@@ -801,12 +829,12 @@ function miRenderRow(s, i) {
       break;
     }
   }
-  row.appendChild(nameEl);
+  cell.appendChild(nameEl);
 
   var modelEl = document.createElement('div');
   modelEl.className = 'mi-model';
   modelEl.textContent = s.model || '(no model)';
-  row.appendChild(modelEl);
+  cell.appendChild(modelEl);
 
   var actions = document.createElement('div');
   actions.className = 'mi-actions';
@@ -825,8 +853,113 @@ function miRenderRow(s, i) {
     mk('archive', 'mi-warn', function () { miAct('archive', s.name); });
     mk('delete', 'mi-danger', function () { miAct('delete', s.name, false); });
   }
-  row.appendChild(actions);
+  cell.appendChild(actions);
+
+  if (reorder) {
+    var tab = document.createElement('div');
+    tab.className = 'mi-drag';
+    var up = document.createElement('button');
+    up.className = 'mi-step mi-writable';
+    up.textContent = '\u2191';
+    up.title = 'move up';
+    up.disabled = !reorder.up;
+    up.onclick = function () { miStep(i, -1); };
+    var grip = document.createElement('div');
+    grip.className = 'mi-grip';
+    grip.textContent = '\u22EE\u22EE';
+    grip.title = 'drag to reorder';
+    var down = document.createElement('button');
+    down.className = 'mi-step mi-writable';
+    down.textContent = '\u2193';
+    down.title = 'move down';
+    down.disabled = !reorder.down;
+    down.onclick = function () { miStep(i, 1); };
+    tab.appendChild(up);
+    tab.appendChild(grip);
+    tab.appendChild(down);
+    row.appendChild(tab);
+    row.appendChild(cell);
+    if (!ro) miWireDrag(row, s);
+  } else {
+    row.appendChild(cell);
+  }
   return row;
+}
+
+var miDrag = null;
+
+function miClearDrops() {
+  var els = document.querySelectorAll(
+    '.mi-row.drop-before, .mi-row.drop-after');
+  Array.prototype.forEach.call(els, function (el) {
+    el.classList.remove('drop-before', 'drop-after');
+  });
+}
+
+function miWireDrag(row, s) {
+  var grip = row.querySelector('.mi-grip');
+  grip.addEventListener('mousedown', function () { row.draggable = true; });
+  grip.addEventListener('mouseup',   function () { row.draggable = false; });
+  row.addEventListener('dragstart', function (e) {
+    if (row.draggable !== true) return;
+    miDrag = { name: s.name, archived: s.archived,
+               region: s.region, el: row };
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', s.name); } catch (err) {}
+    row.classList.add('mi-dragging');
+  });
+  row.addEventListener('dragend', function () {
+    row.draggable = false;
+    row.classList.remove('mi-dragging');
+    miClearDrops();
+    miDrag = null;
+  });
+  row.addEventListener('dragover', function (e) {
+    if (!miDrag || miDrag.el === row ||
+        row.dataset.region !== miDrag.region) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    var r = row.getBoundingClientRect();
+    var pos = (e.clientY - r.top) < r.height / 2 ? 'before' : 'after';
+    if (row.classList.contains('drop-' + pos)) return;
+    miClearDrops();
+    row.classList.add('drop-' + pos);
+  });
+  row.addEventListener('dragleave', function (e) {
+    if (e.relatedTarget && row.contains(e.relatedTarget)) return;
+    row.classList.remove('drop-before', 'drop-after');
+  });
+  row.addEventListener('drop', function (e) {
+    if (!miDrag || miDrag.el === row ||
+        row.dataset.region !== miDrag.region) return;
+    e.preventDefault();
+    var r = row.getBoundingClientRect();
+    var pos = (e.clientY - r.top) < r.height / 2 ? 'before' : 'after';
+    var d = miDrag;
+    miClearDrops();
+    row.classList.remove('mi-dragging');
+    miDrag = null;
+    row.draggable = false;
+    miMove(d.name, d.archived, row.dataset.name, pos);
+  });
+}
+
+function miMove(name, archived, target, position) {
+  miOpStatus('models-op-status', 'moving\u2026', true);
+  miPost('/api/models/section/move', {
+    name: name, target: target, position: position, archived: archived,
+  }).then(function (d) {
+    miOpStatus('models-op-status', d.ok ? '' : d.error, !!d.ok);
+    if (d.ok) miLoad();
+  });
+}
+
+function miStep(i, dir) {
+  var ms = miData.models;
+  var s = ms[i];
+  var j = i + dir;
+  if (j < 0 || j >= ms.length || ms[j].region !== s.region) return;
+  miMove(s.name, s.archived, ms[j].name, dir < 0 ? 'before' : 'after');
 }
 
 function miRender(d) {
@@ -850,16 +983,25 @@ function miRender(d) {
 
   var table = miEl('models-table');
   table.innerHTML = '';
+  var counts = {};
+  d.models.forEach(function (s) {
+    counts[s.region] = (counts[s.region] || 0) + 1;
+  });
   var region = null;
   d.models.forEach(function (s, i) {
-    if (s.region !== region) {
+    var isFirst = s.region !== region;
+    if (isFirst) {
       region = s.region;
       var rh = document.createElement('div');
       rh.className = 'mi-region';
       rh.textContent = REGION_LABELS[s.region] || s.region;
       table.appendChild(rh);
     }
-    table.appendChild(miRenderRow(s, i));
+    var nxt = d.models[i + 1];
+    var isLast = !nxt || nxt.region !== s.region;
+    var reorder = (counts[s.region] || 0) >= 2
+      ? { up: isFirst, down: !isLast } : null;
+    table.appendChild(miRenderRow(s, i, reorder, ro));
   });
   Array.prototype.forEach.call(
     document.querySelectorAll('#models-card .mi-writable'),

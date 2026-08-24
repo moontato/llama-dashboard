@@ -334,6 +334,65 @@ class Document:
         b.archived = False
         self._move_to_region(b, target)
 
+    def move_section(self, name: str, target: str, position: str,
+                     archived: bool = False) -> None:
+        """Move section ``name`` directly before/after section ``target``
+        (drag-and-drop reorder). Sections may only move within their own
+        region. The region marker always stays with whichever block ends
+        up first in the region. Dropping a section into its current slot
+        is a no-op."""
+        if position not in ("before", "after"):
+            raise ModelsIniError("position must be 'before' or 'after'")
+        b = self.block(name, archived)
+        t = self.block(target, archived)
+        if t is b:
+            return
+        if b.region != t.region:
+            raise ModelsIniError(
+                f"section [{name}] can only be moved within its own region")
+        idx_b = self.blocks.index(b)
+        idx_t = self.blocks.index(t)
+        if (position == "before" and idx_b == idx_t - 1) or \
+                (position == "after" and idx_b == idx_t + 1):
+            return
+        region = b.region
+        span = self._region_span(region)
+        # the marker must travel when the region's head changes owner
+        head_changes = span[0] == idx_b or \
+            (span[0] == idx_t and position == "before")
+        marker = self._marker_of(region) if \
+            (head_changes and region in _REGION_MARKERS) else None
+        content = [l for l in b.leading if _marker_region(l) is None]
+        while content and not content[0].strip():
+            content.pop(0)
+        while content and not content[-1].strip():
+            content.pop()
+        first_old = self.blocks[0]
+        self.blocks.pop(idx_b)
+        idx_t = self.blocks.index(t)
+        insert_at = idx_t if position == "before" else idx_t + 1
+        self.blocks.insert(insert_at, b)
+        if first_old is not b and self.blocks.index(first_old) > 0 and \
+                (not first_old.leading or first_old.leading[0].strip()):
+            first_old.leading.insert(0, "\n")
+        pre = ["\n"] if insert_at else []
+        b.leading = pre + content + ["\n"] if content else pre
+        if marker is not None:
+            if span[0] == idx_t and position == "before":
+                b.leading += [marker, "\n"]
+            else:
+                new_head = next(x for x in self.blocks
+                                if x.region == region)
+                pos = 1 if new_head.leading and \
+                        not new_head.leading[0].strip() else 0
+                new_head.leading[pos:pos] = [marker, "\n"]
+        if self.blocks[0] is not b:
+            # the first block never owns a leading seam at parse time;
+            # strip one left behind if a mid-file block became first
+            while self.blocks[0].leading and \
+                    not self.blocks[0].leading[0].strip():
+                self.blocks[0].leading.pop(0)
+
     def delete_section(self, name: str, archived: bool = False) -> None:
         """Remove a section entirely (no git — this is the ini level).
 
