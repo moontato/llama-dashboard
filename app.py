@@ -445,9 +445,9 @@ def api_models_add() -> Response:
     name = str(data.get("name", "")).strip()
     model = str(data.get("model", "")).strip()
     params = data.get("params") or {}
-    region = str(data.get("region", "individual")).strip()
-    if region not in ("profiles", "individual"):
-        return jsonify({"ok": False, "error": "region must be profiles or individual"}), 400
+    region = str(data.get("region", "models")).strip()
+    if region not in ("profiles", "models"):
+        return jsonify({"ok": False, "error": "region must be profiles or models"}), 400
     if not _valid_name(name):
         return jsonify({"ok": False, "error": "invalid section name"}), 400
     if not model:

@@ -18,7 +18,27 @@ _HEADER_RE   = re.compile(r"^\[(?P<name>[^\]]+)\]$")
 _C_HEADER_RE = re.compile(r"^#\s*\[(?P<name>[^\]]+)\]$")
 _MARKER_RE   = re.compile(r"^#\s*==\s*([^=]+?)\s*==$")
 _KEY_RE      = re.compile(r"^(?P<key>[^=\s#;]+)\s*=(.*)$")
-_REGIONS     = {"PROFILES": "profiles", "INDIVIDUAL MODELS": "individual", "ARCHIVED": "archived"}
+
+# Paired regions: each active region has an archived twin directly below
+# it. Active regions hold only active blocks, archived regions only
+# archived ones, so archiving a section moves it into its twin and
+# restoring moves it back.
+_REGIONS = {
+    "PROFILES": "profiles",
+    "ARCHIVED PROFILES": "archived_profiles",
+    "MODELS": "models",
+    "ARCHIVED MODELS": "archived_models",
+}
+_REGION_MARKERS = {
+    "profiles": "# == PROFILES ==\n",
+    "archived_profiles": "# == ARCHIVED PROFILES ==\n",
+    "models": "# == MODELS ==\n",
+    "archived_models": "# == ARCHIVED MODELS ==\n",
+}
+_REGION_ORDER = ("profiles", "archived_profiles", "models", "archived_models")
+_PAIRS = {"profiles": "archived_profiles", "models": "archived_models"}
+_TWIN = dict(_PAIRS)
+_TWIN.update({a: p for p, a in _PAIRS.items()})
 
 
 def _marker_region(line: str):
@@ -94,9 +114,10 @@ class Document:
     # ── lookup ────────────────────────────────────────────────
 
     def block(self, name: str, archived: bool = False) -> Block:
-        candidates = [b for b in self.blocks if b.name == name and b.archived == archived]
+        kind = "archived" if archived else "active"
+        candidates = [b for b in self.blocks
+                      if b.name == name and b.archived == archived]
         if not candidates:
-            kind = "archived" if archived else "active"
             raise ModelsIniError(f"section [{name}] not found ({kind})")
         if len(candidates) > 1:
             raise ModelsIniError(f"section [{name}] is ambiguous ({kind})")
@@ -115,84 +136,172 @@ class Document:
 
     # ── mutations ─────────────────────────────────────────────
 
-    def _first_archived_idx(self) -> int:
-        for i, b in enumerate(self.blocks):
-            if b.archived:
-                return i
-        return len(self.blocks)
-
-    def _region_span(self, region: str):
-        """(start, last) block indices of ``region``, or None."""
+    def _region_span(self, region: str, exclude: Block = None):
+        """(start, last) block indices of ``region``, or None.
+        ``exclude`` is skipped (a block being moved into its own region)."""
         start = next((i for i, b in enumerate(self.blocks)
-                      if b.region == region), None)
+                      if b.region == region and b is not exclude), None)
         if start is None:
             return None
         last = start
         while last + 1 < len(self.blocks) and \
-                self.blocks[last + 1].region == region:
+                self.blocks[last + 1].region == region and \
+                self.blocks[last + 1] is not exclude:
             last += 1
         return start, last
 
-    def _active_group_end(self, region: str) -> int:
-        """Insertion index preserving the canonical layout: active blocks
-        on top, archived blocks sunk to the bottom of their region."""
-        span = self._region_span(region)
-        if span is None:
-            return self._first_archived_idx()
-        start, last = span
-        for i in range(start, last + 1):
-            if self.blocks[i].archived:
-                return i
-        return last + 1
+    def _marker_location(self, region: str):
+        """Where ``region``'s marker line lives: (container, index) where
+        container is the Block owning it in its leading, or 'header' or
+        'trailer' for the document-level line lists. None if absent."""
+        line = _REGION_MARKERS[region]
+        for b in self.blocks:
+            if line in b.leading:
+                return b, b.leading.index(line)
+        if line in self.header:
+            return "header", self.header.index(line)
+        if line in self.trailer:
+            return "trailer", self.trailer.index(line)
+        return None
 
-    def _relocate(self, b: Block, insert_at: int) -> None:
-        """Move ``b`` to ``insert_at`` (index into the block list AFTER
-        removal). A region marker owned by ``b``'s leading is handed to
-        whichever block now starts the region, so the marker stays at the
-        region head. The moved block's leading is normalised to a blank
-        separator plus any comment lines it carried."""
-        markers = [l for l in b.leading if _MARKER_RE.match(l.strip())]
-        rest = [l for l in b.leading if not _MARKER_RE.match(l.strip())]
-        content = list(rest)
+    def _ensure_marker(self, region: str):
+        """Return _marker_location(region), creating the marker as an
+        anchor when the whole pair was emptied: right before the marker
+        of the next region (in canonical order) that still has one, or in
+        the document trailer if the file ends there."""
+        loc = self._marker_location(region)
+        if loc is not None:
+            return loc
+        marker = _REGION_MARKERS[region]
+        for nxt in _REGION_ORDER[_REGION_ORDER.index(region) + 1:]:
+            nloc = self._marker_location(nxt)
+            if nloc is None:
+                continue
+            container, i = nloc
+            lines = container.leading if isinstance(container, Block) \
+                else (self.header if container == "header" else self.trailer)
+            lines[i:i] = [marker, "\n"]
+            return container, i
+        self.trailer.extend(("\n", marker, "\n") if not self.trailer
+                            else (marker, "\n"))
+        return "trailer", len(self.trailer) - 2
+
+    def _marker_of(self, region: str):
+        """Remove region's marker line wherever it lives (block leading,
+        document header or trailer) and return it, or None if absent.
+        The separator blank following the marker goes with it."""
+        line = _REGION_MARKERS[region]
+        for container in list(self.blocks):
+            if line not in container.leading:
+                continue
+            j = container.leading.index(line)
+            del container.leading[j]
+            if j < len(container.leading) and not container.leading[j].strip():
+                del container.leading[j]
+            return line
+        for name in ("header", "trailer"):
+            lst = getattr(self, name)
+            if line not in lst:
+                continue
+            j = lst.index(line)
+            del lst[j]
+            if j < len(lst) and not lst[j].strip():
+                del lst[j]
+            return line
+        return None
+
+    def _move_to_region(self, b: Block, target: str) -> None:
+        """Move ``b`` into region ``target`` (whose blocks all share its
+        archived flag), appended at the end of the region. ``b``'s
+        archived flag and comment state must already match ``target``.
+
+        Marker bookkeeping, so the file stays parseable and the
+        active/archived pairing stays adjacent:
+        - a marker owned by ``b`` in its leading is handed to the block
+          that now starts the region it leaves;
+        - if that region becomes empty, its marker is kept as an anchor
+          (see _ensure_marker) so the pair's markers stay next to each
+          other and destinations stay positional;
+        - if ``target`` was empty, ``b`` takes its marker and becomes the
+          region head (the marker line is split out of whatever block or
+          line list currently carries it).
+        """
+        src = b.region
+        src_marker = self._marker_of(src) if src in _REGION_MARKERS else None
+        content = [l for l in b.leading if _marker_region(l) is None]
         while content and not content[0].strip():
             content.pop(0)
         while content and not content[-1].strip():
             content.pop()
-        idx = next(k for k, x in enumerate(self.blocks) if x is b)
-        del self.blocks[idx]
-        self.blocks.insert(insert_at, b)
-        if content:
-            b.leading = ["\n"] + content + ["\n"]
+        idx_b = next(k for k, x in enumerate(self.blocks) if x is b)
+        tspan = self._region_span(target, exclude=b)
+        self.blocks.pop(idx_b)
+        if tspan is not None:
+            last_t = tspan[1]
+            insert_at = last_t - (1 if last_t > idx_b else 0) + 1
+            self.blocks.insert(insert_at, b)
+            b.leading = (["\n"] + content + ["\n"] if content
+                         else ["\n"]) if insert_at else (
+                             content + ["\n"] if content else [])
         else:
-            b.leading = [] if insert_at == 0 else ["\n"]
-        if markers:
-            start = next(i for i, x in enumerate(self.blocks)
-                         if x.region == b.region)
-            h = self.blocks[start]
-            pos = 1 if h.leading and not h.leading[0].strip() else 0
-            h.leading[pos:pos] = markers
+            container, i = self._ensure_marker(target)
+            marker = _REGION_MARKERS[target]
+            if isinstance(container, Block):
+                pre = container.leading[:i]
+                container.leading = container.leading[i + 1:]
+                self.blocks.insert(self.blocks.index(container), b)
+                b.leading = pre + [marker] + content + ["\n"]
+            elif container == "header":
+                # header lines before the marker stay above the block;
+                # lines after it move below it (into the trailer)
+                self.trailer = self.header[i + 1:] + self.trailer
+                self.header = self.header[:i]
+                self.blocks.insert(0, b)
+                b.leading = [marker] + content + ["\n"]
+            else:  # trailer
+                pre = self.trailer[:i]
+                self.trailer = self.trailer[i + 1:]
+                self.blocks.insert(len(self.blocks), b)
+                b.leading = pre + [marker] + content + ["\n"]
+        b.region = target
+        if src_marker is not None:
+            new_head = next((x for x in self.blocks if x.region == src),
+                            None)
+            if new_head is not None:
+                pos = 1 if new_head.leading and \
+                        not new_head.leading[0].strip() else 0
+                new_head.leading[pos:pos] = [src_marker, "\n"]
+            else:
+                self._ensure_marker(src)
 
     def add_section(self, name: str, keys: List[Tuple[str, str]],
-                    region: str = "individual") -> None:
-        """Append a new active section at the bottom of its region's
-        active group (above any archived blocks)."""
+                    region: str = "models") -> None:
+        """Append a new active section at the bottom of its (active)
+        region."""
+        if region not in _PAIRS:
+            raise ModelsIniError(
+                f"region must be one of {', '.join(_PAIRS)}")
         if any(b.name == name and not b.archived for b in self.blocks):
             raise ModelsIniError(f"section [{name}] already exists")
-        idx = self._active_group_end(region)
         block = Block(
             name=name,
             region=region,
             archived=False,
-            leading=["\n"] if idx else [],
+            leading=[],
             header=f"[{name}]\n",
             body=[f"{k} = {v}\n" for k, v in keys],
         )
-        self.blocks.insert(idx, block)
+        self.blocks.append(block)
+        self._move_to_region(block, region)
 
     def archive_section(self, name: str) -> None:
-        """Archive an active section: comment it and sink it to the bottom
-        of its region (below all other blocks of that region)."""
+        """Archive an active section: comment it and move it to the bottom
+        of its region's archived twin."""
         b = self.block(name)
+        if b.region not in _PAIRS:
+            raise ModelsIniError(
+                f"section [{name}] cannot be archived (region "
+                f"'{b.region}' has no archived twin)")
         body = []
         for line in b.body:
             core = line.strip()
@@ -203,22 +312,17 @@ class Document:
         b.header = f"# [{name}]{_eol(b.header)}"
         b.body = body
         b.archived = True
-        span = self._region_span(b.region)
-        i = next(k for k, x in enumerate(self.blocks) if x is b)
-        if span is not None and span[1] > i:
-            self._relocate(b, span[1])
+        self._move_to_region(b, _PAIRS[b.region])
 
     def restore_section(self, name: str) -> None:
         """Restore an archived section: uncomment it and raise it to the
-        bottom of its region's active group (above the first archived)."""
+        bottom of its region's active twin."""
         b = self.block(name, archived=True)
-        span = self._region_span(b.region)
-        if span is not None:
-            target = next(k for k in range(span[0], span[1] + 1)
-                          if self.blocks[k].archived)
-            i = next(k for k, x in enumerate(self.blocks) if x is b)
-            if target != i:
-                self._relocate(b, target)
+        target = _TWIN.get(b.region)
+        if target is None:
+            raise ModelsIniError(
+                f"section [{name}] cannot be restored (region "
+                f"'{b.region}' has no active twin)")
         body = []
         for line in b.body:
             if line.lstrip().startswith("#"):
@@ -228,34 +332,36 @@ class Document:
         b.header = f"[{b.name}]{_eol(b.header)}"
         b.body = body
         b.archived = False
+        self._move_to_region(b, target)
 
     def delete_section(self, name: str, archived: bool = False) -> None:
         """Remove a section entirely (no git — this is the ini level).
 
-        If the deleted block owns a region marker and the region still has
-        blocks, the marker is handed to the block that now starts the
-        region. If the region itself becomes empty, the marker is dropped
-        with the block: handing it to the first block of the next region
-        would leave a stale marker labelling an empty area, and it would
-        travel with that block on later moves."""
+        Marker bookkeeping: a marker owned by the deleted block is handed
+        to the block that now starts the region. If the region becomes
+        empty, its marker is kept as an anchor next to the pair's other
+        marker; only when the whole pair (active + archived) is empty are
+        both markers dropped."""
         b = self.block(name, archived)
         idx = self.blocks.index(b)
-        surviving = [l for l in b.leading if _MARKER_RE.match(l.strip())]
+        src = b.region
+        src_marker = self._marker_of(src) if src in _REGION_MARKERS else None
         self.blocks.pop(idx)
-        if surviving:
-            nxt = self.blocks[idx] if idx < len(self.blocks) else None
-            if nxt is not None and nxt.region == b.region:
-                pos = 1 if nxt.leading and not nxt.leading[0].strip() \
-                    else 0
-                nxt.leading[pos:pos] = surviving
-            # else: the region is now empty — the marker is dropped with
-            # the block (at end of file it simply goes away: it labelled
-            # an area that no longer has any sections).
-        elif idx == 0:
-            # The first block's region marker may live in the document
-            # header; drop it when the region no longer has any blocks.
-            self.header = [l for l in self.header
-                            if _marker_region(l) != b.region]
+        if src_marker is None:
+            return
+        new_head = next((x for x in self.blocks if x.region == src), None)
+        if new_head is not None:
+            pos = 1 if new_head.leading and \
+                    not new_head.leading[0].strip() else 0
+            new_head.leading[pos:pos] = [src_marker, "\n"]
+            return
+        twin = _TWIN.get(src)
+        if twin is not None and self._region_span(twin) is not None:
+            self._ensure_marker(src)
+            return
+        # whole pair empty: drop the twin's marker too
+        if twin is not None:
+            self._marker_of(twin)
 
     def rename_section(self, name: str, new: str) -> None:
         b = self.block(name)

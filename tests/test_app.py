@@ -64,12 +64,13 @@ class ApiTestCase(unittest.TestCase):
         code, d = self.get()
         self.assertEqual(code, 200)
         self.assertTrue(d["writable"])
-        self.assertEqual(len(d["models"]), 39)      # 22 active + 17 archived
+        self.assertEqual(len(d["models"]), 39)      # 21 active + 18 archived
         self.assertEqual(d["models"][1]["name"], "General-Bot-small")
         self.assertFalse(d["models"][1]["archived"])
-        # aliases: Qwen3.8-27B model shared by six active sections
+        # aliases: Qwen3.8-27B model shared by five active sections
+        # (Coding-Bot is archived)
         q = [m for m in d["aliases"] if m.endswith("Qwen3.8-27B-Q6_K.gguf")]
-        self.assertEqual(len(d["aliases"][q[0]]), 6)
+        self.assertEqual(len(d["aliases"][q[0]]), 5)
         # git: tmp dir is not a repository -> graceful error object
         self.assertFalse(d["git"]["ok"])
 

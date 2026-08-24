@@ -747,6 +747,14 @@ function gitPullModels() { _advBtn('gitpull-btn',  'gitpull-status',  '/api/git-
 var miData = null;          // last /api/models payload
 var miOriginal = null;      // {key:value} snapshot of the row being edited
 
+var REGION_LABELS = {
+  'global': 'Global',
+  'profiles': 'Profiles',
+  'archived_profiles': 'Archived profiles',
+  'models': 'Models',
+  'archived_models': 'Archived models',
+};
+
 function miPost(url, body) {
   return fetch(url, {
     method: 'POST',
@@ -848,7 +856,7 @@ function miRender(d) {
       region = s.region;
       var rh = document.createElement('div');
       rh.className = 'mi-region';
-      rh.textContent = s.region;
+      rh.textContent = REGION_LABELS[s.region] || s.region;
       table.appendChild(rh);
     }
     table.appendChild(miRenderRow(s, i));
