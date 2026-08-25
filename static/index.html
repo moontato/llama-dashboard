@@ -346,7 +346,20 @@
       white-space: nowrap;
     }
     .mi-badge-arch { background: rgba(239,68,68,0.12); border-color: var(--crit); color: var(--crit); }
-    .mi-badge-alias { width: 100%; min-width: 0; white-space: normal; }
+    .mi-badge-alias { display: none; width: 100%; min-width: 0; white-space: normal; }
+    .mi-alias-info {
+      flex: none; display: inline-flex; align-items: center; justify-content: center;
+      width: 0.9rem; height: 0.9rem; border-radius: 50%;
+      border: 1px solid var(--border); background: none; padding: 0;
+      color: var(--muted); font-size: 0.6rem; font-style: italic; line-height: 1;
+      cursor: pointer;
+    }
+    .mi-alias-info:hover, .mi-alias-info:focus, .mi-alias-info.show {
+      color: var(--gpu); border-color: var(--cpu); outline: none;
+    }
+    .mi-alias-info:hover ~ .mi-badge-alias,
+    .mi-alias-info:focus ~ .mi-badge-alias,
+    .mi-alias-info.show ~ .mi-badge-alias { display: block; }
     .mi-actions { display: flex; gap: 0.35rem; margin-top: 0.35rem; }
     .mini-actions { display: flex; gap: 0.3rem; }
     .mini-btn {
@@ -820,10 +833,17 @@ function miRenderRow(s, i, reorder, ro) {
       var names = miData.aliases[m];
       if (names.length > 1 && !s.archived) {
         var others = names.filter(function (x) { return x !== s.name; });
+        var tip = 'also: ' + others.join(', ');
+        var trigger = document.createElement('button');
+        trigger.type = 'button';
+        trigger.className = 'mi-alias-info';
+        trigger.textContent = 'i';
+        trigger.setAttribute('aria-label', tip);
+        trigger.onclick = function (e) { e.stopPropagation(); trigger.classList.toggle('show'); };
         var badge = document.createElement('span');
         badge.className = 'mi-badge mi-badge-alias';
-        badge.textContent = 'also: ' + others.join(', ');
-        badge.setAttribute('title', 'same model as: ' + names.join(', '));
+        badge.textContent = tip;
+        nameEl.appendChild(trigger);
         nameEl.appendChild(badge);
       }
       break;
@@ -1135,6 +1155,18 @@ function miAdd() {
     }
   });
 }
+
+function miUnpinAliases() {
+  var pinned = document.querySelectorAll('.mi-alias-info.show');
+  for (var k = 0; k < pinned.length; k++) pinned[k].classList.remove('show');
+}
+document.addEventListener('click', function (e) {
+  if (e.target.closest && e.target.closest('.mi-alias-info')) return;
+  miUnpinAliases();
+}, true);
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') miUnpinAliases();
+});
 
 miLoad();</script>
 </body>
