@@ -297,13 +297,17 @@
       font: inherit;
       padding: 0.35rem 0.5rem;
     }
+    .mi-region-wrap { margin: 0.5rem 0 0.15rem; }
     .mi-region {
-      font-size: 0.62rem;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin: 0.5rem 0 0.15rem;
+      display: flex; align-items: center; gap: 0.35rem; width: 100%;
+      background: none; border: none; cursor: pointer; text-align: left;
+      font-family: inherit; font-size: 0.62rem; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--muted); padding: 0.15rem 0;
     }
+    .mi-region:hover { color: var(--text); }
+    .mi-chev { display: inline-block; width: 1.1em; opacity: 0.75; }
+    .mi-region-count { margin-left: auto; opacity: 0.6; }
+    .mi-region-wrap.closed .mi-region-body { display: none; }
     .mi-row { border-top: 1px solid var(--border); padding: 0.45rem 0; display: flex; gap: 0.45rem; }
     .mi-row:first-child { border-top: none; }
     .mi-cell { flex: 1; min-width: 0; }
@@ -799,6 +803,7 @@ function gitPullModels() { _advBtn('gitpull-btn',  'gitpull-status',  '/api/git-
 var miData = null;          // last /api/models payload
 var miOriginal = null;      // {key:value} snapshot of the row being edited
 var miEditArchived = false; // archived-state of the row being edited
+var miRegionOpen = {};      // per-region open/closed; every region starts collapsed
 
 var REGION_LABELS = {
   'global': 'Global',
@@ -1018,6 +1023,7 @@ function miStep(i, dir) {
 }
 
 function miRender(d) {
+  var prev = miData;
   miData = d;
   var line = miEl('models-git-line');
   if (d.git && d.git.ok) {
@@ -1042,21 +1048,63 @@ function miRender(d) {
   d.models.forEach(function (s) {
     counts[s.region] = (counts[s.region] || 0) + 1;
   });
-  var region = null;
+
+  // regions whose member list changed since the previous load auto-open
+  var changed = {};
+  var curNames = {}, prevNames = {};
+  d.models.forEach(function (s) {
+    (curNames[s.region] || (curNames[s.region] = [])).push(s.name);
+  });
+  if (prev) prev.models.forEach(function (s) {
+    (prevNames[s.region] || (prevNames[s.region] = [])).push(s.name);
+  });
+  if (prev) Object.keys(curNames).forEach(function (rg) {
+    var a = curNames[rg].slice().sort();
+    var b = (prevNames[rg] || []).slice().sort();
+    if (JSON.stringify(a) !== JSON.stringify(b)) changed[rg] = true;
+  });
+
+  var region = null, body = null;
   d.models.forEach(function (s, i) {
     var isFirst = s.region !== region;
     if (isFirst) {
       region = s.region;
-      var rh = document.createElement('div');
-      rh.className = 'mi-region';
-      rh.textContent = REGION_LABELS[s.region] || s.region;
-      table.appendChild(rh);
+      var rg = region;
+      var open = !!miRegionOpen[rg] || !!changed[rg];
+      if (open) miRegionOpen[rg] = true;
+      var wrap = document.createElement('div');
+      wrap.className = 'mi-region-wrap' + (open ? '' : ' closed');
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'mi-region';
+      var chev = document.createElement('span');
+      chev.className = 'mi-chev';
+      chev.textContent = open ? '▾' : '▸';
+      var count = document.createElement('span');
+      count.className = 'mi-region-count';
+      count.textContent = counts[rg];
+      btn.appendChild(chev);
+      btn.appendChild(document.createTextNode(REGION_LABELS[rg] || rg));
+      btn.appendChild(count);
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      body = document.createElement('div');
+      body.className = 'mi-region-body';
+      btn.onclick = function () {
+        var nowOpen = !miRegionOpen[rg];
+        miRegionOpen[rg] = nowOpen;
+        wrap.classList.toggle('closed', !nowOpen);
+        chev.textContent = nowOpen ? '▾' : '▸';
+        btn.setAttribute('aria-expanded', nowOpen ? 'true' : 'false');
+      };
+      wrap.appendChild(btn);
+      wrap.appendChild(body);
+      table.appendChild(wrap);
     }
     var nxt = d.models[i + 1];
     var isLast = !nxt || nxt.region !== s.region;
     var reorder = (counts[s.region] || 0) >= 2
       ? { up: isFirst, down: !isLast } : null;
-    table.appendChild(miRenderRow(s, i, reorder, ro));
+    body.appendChild(miRenderRow(s, i, reorder, ro));
   });
   Array.prototype.forEach.call(
     document.querySelectorAll('#models-card .mi-writable'),
