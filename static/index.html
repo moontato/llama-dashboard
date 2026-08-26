@@ -1188,7 +1188,8 @@ function miUnpinAliases() {
   for (var k = 0; k < pinned.length; k++) pinned[k].classList.remove('show');
 }
 document.addEventListener('click', function (e) {
-  if (e.target.closest && e.target.closest('.mi-alias-info')) return;
+  if (e.target.closest &&
+      (e.target.closest('.mi-alias-info') || e.target.closest('.mi-detail'))) return;
   miUnpinAliases();
 }, true);
 document.addEventListener('keydown', function (e) {
