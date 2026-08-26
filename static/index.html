@@ -401,7 +401,29 @@
     .mi-field span { display: block; margin-bottom: 0.2rem; }
     .mi-param { display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.35rem; }
     .mi-param input { flex: 1; }
-    .mi-add-body, .mi-edit-body { margin-top: 0.6rem; }
+    details.mi-disc { margin-bottom: 0.5rem; }
+    .mi-sum {
+      list-style: none; display: flex; align-items: center; justify-content: space-between;
+      cursor: pointer; user-select: none;
+      font-size: 0.78rem; font-weight: 600; color: var(--text);
+      padding: 0.3rem 0.55rem;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: rgba(255,255,255,0.03);
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .mi-sum::-webkit-details-marker { display: none; }
+    .mi-sum::after {
+      content: '▶'; font-size: 0.6rem; color: var(--muted);
+      margin-left: 0.5rem; transition: transform 0.2s;
+    }
+    details[open] > .mi-sum::after { transform: rotate(90deg); }
+    .mi-sum:hover { background: rgba(255,255,255,0.06); border-color: var(--cpu); }
+    details[open] > .mi-sum { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+    .mi-add-body, .mi-edit-body {
+      padding: 0.55rem; margin-top: 0;
+      border: 1px solid var(--border); border-top: none; border-radius: 0 0 6px 6px;
+      background: rgba(0,0,0,0.15);
+    }
     #models-op-status { margin-top: 0.3rem; }
   </style>
 </head>
@@ -492,8 +514,8 @@
 
     <hr class="adv-divider">
 
-    <details>
-      <summary class="adv-svc-name">Add section</summary>
+    <details class="mi-disc">
+      <summary class="mi-sum">Add section</summary>
       <div class="mi-add-body">
         <label class="mi-field"><span>name</span><input id="mi-add-name" class="mi-input" placeholder="My-Model"></label>
         <label class="mi-field"><span>model</span><input id="mi-add-model" class="mi-input" placeholder="/mnt/ssd/llamacpp_models/...gguf"></label>
@@ -504,8 +526,8 @@
       </div>
     </details>
 
-    <details id="mi-editor">
-      <summary class="adv-svc-name">Edit section</summary>
+    <details id="mi-editor" class="mi-disc">
+      <summary class="mi-sum">Edit section</summary>
       <div class="mi-edit-body">
         <input type="hidden" id="mi-name">
         <label class="mi-field"><span>section name</span><input id="mi-newname" class="mi-input"></label>
