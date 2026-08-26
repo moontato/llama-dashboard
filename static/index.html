@@ -346,7 +346,22 @@
       white-space: nowrap;
     }
     .mi-badge-arch { background: rgba(239,68,68,0.12); border-color: var(--crit); color: var(--crit); }
-    .mi-badge-alias { display: none; width: 100%; min-width: 0; white-space: normal; }
+    .mi-detail {
+      display: none;
+      width: 100%;
+      padding-top: 0.3rem;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 400;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+    .mi-detail hr { border: 0; border-top: 1px solid var(--border); margin: 0.35rem 0; }
+    .mi-detail-line {
+      display: block;
+      font-family: ui-monospace, JanusMono, "DejaVu Sans Mono", Menlo, Consolas, monospace;
+    }
+    .mi-detail-line em { font-style: normal; color: var(--warn); }
     .mi-alias-info {
       flex: none; display: inline-flex; align-items: center; justify-content: center;
       width: 0.9rem; height: 0.9rem; border-radius: 50%;
@@ -357,9 +372,10 @@
     .mi-alias-info:hover, .mi-alias-info:focus, .mi-alias-info.show {
       color: var(--gpu); border-color: var(--cpu); outline: none;
     }
-    .mi-alias-info:hover ~ .mi-badge-alias,
-    .mi-alias-info:focus ~ .mi-badge-alias,
-    .mi-alias-info.show ~ .mi-badge-alias { display: block; }
+    .mi-alias-info:hover ~ .mi-detail,
+    .mi-alias-info:focus ~ .mi-detail,
+    .mi-alias-info.show ~ .mi-detail,
+    .mi-detail:hover { display: block; }
     .mi-actions { display: flex; gap: 0.35rem; margin-top: 0.35rem; }
     .mini-actions { display: flex; gap: 0.3rem; }
     .mini-btn {
@@ -828,28 +844,37 @@ function miRenderRow(s, i, reorder, ro) {
     nameEl.appendChild(archBadge);
   }
 
-  if (miData && miData.aliases) {
-    for (var m in miData.aliases) {
-      if (m !== s.model) continue;
-      var names = miData.aliases[m];
-      if (names.length > 1 && !s.archived) {
-        var others = names.filter(function (x) { return x !== s.name; });
-        var tip = 'also: ' + others.join(', ');
-        var trigger = document.createElement('button');
-        trigger.type = 'button';
-        trigger.className = 'mi-alias-info';
-        trigger.textContent = 'i';
-        trigger.setAttribute('aria-label', tip);
-        trigger.onclick = function (e) { e.stopPropagation(); trigger.classList.toggle('show'); };
-        var badge = document.createElement('span');
-        badge.className = 'mi-badge mi-badge-alias';
-        badge.textContent = tip;
-        nameEl.appendChild(trigger);
-        nameEl.appendChild(badge);
-      }
-      break;
+  var trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'mi-alias-info';
+  trigger.textContent = 'i';
+  var detail = document.createElement('span');
+  detail.className = 'mi-detail';
+  var aliasTip = '';
+  if (miData && miData.aliases && s.model) {
+    var names = miData.aliases[s.model];
+    if (names && names.length > 1) {
+      var others = names.filter(function (x) { return x !== s.name; });
+      aliasTip = 'also: ' + others.join(', ');
+      var line = document.createElement('span');
+      line.className = 'mi-detail-line';
+      line.textContent = 'aliases = ' + aliasTip;
+      detail.appendChild(line);
+      detail.appendChild(document.createElement('hr'));
     }
   }
+  s.keys.forEach(function (kv) {
+    if (kv.key === 'name') return;  // shown as the section header
+    var line = document.createElement('span');
+    line.className = 'mi-detail-line';
+    line.textContent = kv.key + ' = ' + kv.value;
+    detail.appendChild(line);
+  });
+  trigger.setAttribute('aria-label', 'show/hide details'
+    + (aliasTip ? ' (' + aliasTip + ')' : ''));
+  trigger.onclick = function (e) { e.stopPropagation(); trigger.classList.toggle('show'); };
+  nameEl.appendChild(trigger);
+  nameEl.appendChild(detail);
   cell.appendChild(nameEl);
 
   var modelEl = document.createElement('div');
