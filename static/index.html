@@ -782,6 +782,7 @@ function gitPullModels() { _advBtn('gitpull-btn',  'gitpull-status',  '/api/git-
 // ── models.ini editor ────────────────────────────────────────────
 var miData = null;          // last /api/models payload
 var miOriginal = null;      // {key:value} snapshot of the row being edited
+var miEditArchived = false; // archived-state of the row being edited
 
 var REGION_LABELS = {
   'global': 'Global',
@@ -1091,6 +1092,7 @@ function miAddParam(key, value) {
 
 function miEdit(i) {
   var s = miData.models[i];
+  miEditArchived = !!s.archived;
   miEl('mi-name').value = s.name;
   miEl('mi-newname').value = s.name;
   miEl('mi-model').value = s.model || '';
@@ -1123,7 +1125,7 @@ function miSaveEdit() {
   Object.keys(miOriginal).forEach(function (k) {
     if (k !== 'model' && !(k in set)) remove.push(k);
   });
-  var body = { name: name, set: set, remove: remove };
+  var body = { name: name, set: set, remove: remove, archived: miEditArchived };
   var nn = miEl('mi-newname').value.trim();
   if (nn && nn !== name) body.new_name = nn;
   miOpStatus('mi-edit-status', 'saving…', true);

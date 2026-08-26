@@ -487,6 +487,7 @@ def api_models_edit() -> Response:
     data = request.get_json(silent=True) or {}
     name = str(data.get("name", "")).strip()
     new_name = str(data.get("new_name", "")).strip()
+    archived = bool(data.get("archived", False))
     remove = [str(k) for k in (data.get("remove") or [])]
     sets: Dict[str, str] = {}
     for k, v in (data.get("set") or {}).items():
@@ -498,16 +499,16 @@ def api_models_edit() -> Response:
     def fn(doc):
         cur = name
         if new_name and new_name != name:
-            doc.rename_section(name, new_name)
+            doc.rename_section(name, new_name, archived)
             cur = new_name
         for k in remove:
             if k not in sets:
                 try:
-                    doc.remove_key(cur, k)
+                    doc.remove_key(cur, k, archived)
                 except ModelsIniError:
                     pass        # key absence on remove is not an error
         for k, v in sets.items():
-            doc.upsert_key(cur, k, v)
+            doc.upsert_key(cur, k, v, archived)
 
     return _mutate(fn)
 

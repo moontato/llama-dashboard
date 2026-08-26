@@ -133,6 +133,41 @@ class Edits(unittest.TestCase):
         with self.assertRaises(ModelsIniError):
             self.doc.rename_section("Qwen3.5-4B", "gemma-4-31B")
 
+    def test_rename_collision_archived(self):
+        # name exists only in ARCHIVED MODELS — must not create a duplicate
+        with self.assertRaises(ModelsIniError):
+            self.doc.rename_section("Qwen3.5-4B", "gemma-4-31B-Instruct")
+        self._stable()
+
+    def test_rename_archived(self):
+        # [Coding-Bot] exists only in ARCHIVED MODELS
+        self.doc.rename_section("Coding-Bot", "Coding-Bot-x", archived=True)
+        self.assertEqual(
+            self.doc.block("Coding-Bot-x", archived=True).name,
+            "Coding-Bot-x")
+        self._stable()
+
+    def test_rename_collision_from_archived(self):
+        with self.assertRaises(ModelsIniError):
+            self.doc.rename_section("Coding-Bot", "Qwen3.5-4B", archived=True)
+        self._stable()
+
+    def test_upsert_archived_twin_isolated(self):
+        self.doc.upsert_key("gemma-4-26B", "zz_test", "1", archived=True)
+        active = self.doc.block("gemma-4-26B")
+        archived = self.doc.block("gemma-4-26B", archived=True)
+        self.assertNotIn("zz_test", dict(active.keys()))
+        self.assertEqual(dict(archived.keys())["zz_test"], "1")
+        self._stable()
+
+    def test_remove_key_archived(self):
+        self.doc.upsert_key("gemma-4-26B", "zz_test", "1", archived=True)
+        self.doc.remove_key("gemma-4-26B", "zz_test", archived=True)
+        self.assertNotIn(
+            "zz_test",
+            dict(self.doc.block("gemma-4-26B", archived=True).keys()))
+        self._stable()
+
     def test_round_trip_idempotent(self):
         self.doc.upsert_key("Qwen3.5-4B", "temp", "0.5")
         self.doc.archive_section("Qwen3.8-27B-low")

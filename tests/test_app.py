@@ -172,6 +172,54 @@ class ApiTestCase(unittest.TestCase):
                             {"name": "no-such", "set": {"a": "b"}})
         self.assertEqual(code, 400)
 
+    def test_edit_rename_collision_with_archived(self):
+        before = self.read_file()
+        code, d = self.post("/api/models/section/edit", {
+            "name": "Qwen3.5-4B",
+            "new_name": "gemma-4-31B-Instruct",
+        })
+        self.assertEqual(code, 400)
+        self.assertEqual(self.read_file(), before)
+
+    def test_edit_archived_only_section(self):
+        code, d = self.post("/api/models/section/edit", {
+            "name": "Coding-Bot", "archived": True,
+            "set": {"zz_test": "1"},
+        })
+        self.assertEqual(code, 200)
+        self.assert_roundtrip()
+        s = self._section(self.get()[1], "Coding-Bot")
+        self.assertTrue(s["archived"])
+        self.assertEqual(dict((kv["key"], kv["value"])
+                              for kv in s["keys"])["zz_test"], "1")
+
+    def test_edit_archived_twin_keeps_active_untouched(self):
+        def active_keys():
+            twins = [s for s in self.get()[1]["models"]
+                     if s["name"] == "gemma-4-26B" and not s["archived"]]
+            return dict((kv["key"], kv["value"]) for kv in twins[0]["keys"])
+
+        before = active_keys()
+        code, d = self.post("/api/models/section/edit", {
+            "name": "gemma-4-26B", "archived": True,
+            "set": {"zz_test": "1"},
+        })
+        self.assertEqual(code, 200)
+        self.assert_roundtrip()
+        self.assertEqual(active_keys(), before)
+        twins = [s for s in self.get()[1]["models"]
+                 if s["name"] == "gemma-4-26B" and s["archived"]]
+        self.assertEqual(dict((kv["key"], kv["value"])
+                              for kv in twins[0]["keys"])["zz_test"], "1")
+
+    def test_edit_wrong_state_rejected(self):
+        before = self.read_file()
+        # [Coding-Bot] exists only archived; default state is active
+        code, d = self.post("/api/models/section/edit",
+                            {"name": "Coding-Bot", "set": {"a": "b"}})
+        self.assertEqual(code, 400)
+        self.assertEqual(self.read_file(), before)
+
     def test_archive_then_restore(self):
         code, d = self.post("/api/models/section/archive",
                             {"name": "Qwen3.8-27B-low"})

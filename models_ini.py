@@ -422,15 +422,17 @@ class Document:
         if twin is not None:
             self._marker_of(twin)
 
-    def rename_section(self, name: str, new: str) -> None:
-        b = self.block(name)
-        if new != name and any(x.name == new and not x.archived for x in self.blocks):
+    def rename_section(self, name: str, new: str,
+                       archived: bool = False) -> None:
+        b = self.block(name, archived)
+        if new != name and any(x is not b and x.name == new for x in self.blocks):
             raise ModelsIniError(f"section [{new}] already exists")
         b.header = f"[{new}]{_eol(b.header)}"
         b.name = new
 
-    def upsert_key(self, name: str, key: str, value: str) -> None:
-        b = self.block(name)
+    def upsert_key(self, name: str, key: str, value: str,
+                   archived: bool = False) -> None:
+        b = self.block(name, archived)
         line_eol = "\n"
         for i, line in enumerate(b.body):
             core = line.strip()
@@ -443,8 +445,8 @@ class Document:
                 return
         b.body.append(f"{key} = {value}{line_eol}")
 
-    def remove_key(self, name: str, key: str) -> None:
-        b = self.block(name)
+    def remove_key(self, name: str, key: str, archived: bool = False) -> None:
+        b = self.block(name, archived)
         for i, line in enumerate(b.body):
             core = line.strip()
             if not core or core[0] in "#;":
