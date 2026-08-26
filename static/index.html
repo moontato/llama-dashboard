@@ -372,8 +372,8 @@
     .mi-alias-info:hover, .mi-alias-info:focus, .mi-alias-info.show {
       color: var(--gpu); border-color: var(--cpu); outline: none;
     }
-    .mi-alias-info:hover ~ .mi-detail,
-    .mi-alias-info:focus ~ .mi-detail,
+    .mi-alias-info.hovering ~ .mi-detail,
+    .mi-alias-info.focused ~ .mi-detail,
     .mi-alias-info.show ~ .mi-detail,
     .mi-detail:hover { display: block; }
     .mi-actions { display: flex; gap: 0.35rem; margin-top: 0.35rem; }
@@ -872,7 +872,16 @@ function miRenderRow(s, i, reorder, ro) {
   });
   trigger.setAttribute('aria-label', 'show/hide details'
     + (aliasTip ? ' (' + aliasTip + ')' : ''));
-  trigger.onclick = function (e) { e.stopPropagation(); trigger.classList.toggle('show'); };
+  trigger.onclick = function (e) {
+    e.stopPropagation();
+    if (!trigger.classList.toggle('show')) {
+      trigger.classList.remove('hovering', 'focused');
+    }
+  };
+  trigger.addEventListener('mouseenter', function () { trigger.classList.add('hovering'); });
+  trigger.addEventListener('mouseleave', function () { trigger.classList.remove('hovering'); });
+  trigger.addEventListener('focus', function () { trigger.classList.add('focused'); });
+  trigger.addEventListener('blur',  function () { trigger.classList.remove('focused'); });
   nameEl.appendChild(trigger);
   nameEl.appendChild(detail);
   cell.appendChild(nameEl);
@@ -1184,8 +1193,9 @@ function miAdd() {
 }
 
 function miUnpinAliases() {
-  var pinned = document.querySelectorAll('.mi-alias-info.show');
-  for (var k = 0; k < pinned.length; k++) pinned[k].classList.remove('show');
+  var trs = document.querySelectorAll('.mi-alias-info');
+  for (var k = 0; k < trs.length; k++)
+    trs[k].classList.remove('show', 'hovering', 'focused');
 }
 document.addEventListener('click', function (e) {
   if (e.target.closest &&
