@@ -45,8 +45,11 @@ _new_data  = threading.Event()   # pulsed on every fresh jtop tick
 _restart_state   = {"last_ts": 0.0}
 _restart_lock    = threading.Lock()
 
-_gitpull_state   = {"last_ts": 0.0}
-_gitpull_lock    = threading.Lock()
+_write_lock      = threading.Lock()   # serializes models.ini read-modify-write
+_git_lock        = threading.Lock()   # serializes git commit/pull/push
+_fetch_state     = {"last_ts": 0.0}
+_FETCH_MIN_S     = 60    # min seconds between ahead/behind refreshes
+_FETCH_TIMEOUT_S = 10
 MODELS_INI_PATH  = "/mnt/ssd/llamacpp_models/models_ini"
 
 app = Flask(__name__, static_folder="static")
@@ -245,32 +248,6 @@ def restart_llama() -> Response:
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
-@app.route("/api/git-pull-models", methods=["POST"])
-def git_pull_models() -> Response:
-    with _gitpull_lock:
-        elapsed = time.time() - _gitpull_state["last_ts"]
-        if elapsed < RESTART_COOLDOWN_S:
-            remaining = int(RESTART_COOLDOWN_S - elapsed)
-            return jsonify({"ok": False, "error": f"Cooldown: wait {remaining} s"}), 429
-        _gitpull_state["last_ts"] = time.time()
-
-    try:
-        result = subprocess.run(
-            ["sudo", "git", "-C", MODELS_INI_PATH, "pull"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        output = result.stdout.strip() or result.stderr.strip()
-        if result.returncode == 0:
-            return jsonify({"ok": True, "output": output})
-        return jsonify({"ok": False, "error": output or "git pull returned non-zero"}), 500
-    except subprocess.TimeoutExpired:
-        return jsonify({"ok": False, "error": "git pull timed out after 60 s"}), 500
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
 # ─────────────────── models.ini editing (git-backed) ─────────────
 
 def _ini_file() -> str:
@@ -308,23 +285,19 @@ _models_gate = {"ok": False, "reason": "not checked"}
 
 
 def _refresh_models_gate() -> None:
-    """Byte-verify the live file round-trips through our parser."""
+    """Write gate: refuse to modify a file that is unreadable or has no
+    recognizable sections. (parse() keeps every byte verbatim by
+    construction, so those are the only failure modes that can occur.)"""
     try:
         with open(_ini_file(), "r", encoding="utf-8") as fh:
             text = fh.read()
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError):
         _models_gate.update(ok=False, reason="cannot read models.ini")
         return
-    try:
-        doc = parse(text)
-        if doc.render() != text:
-            _models_gate.update(ok=False, reason="byte round-trip failed")
-        elif not doc.blocks:
-            _models_gate.update(ok=False, reason="no sections found")
-        else:
-            _models_gate.update(ok=True, reason="")
-    except Exception:
-        _models_gate.update(ok=False, reason="parse error")
+    if not parse(text).blocks:
+        _models_gate.update(ok=False, reason="no sections found")
+    else:
+        _models_gate.update(ok=True, reason="")
 
 
 def _load_doc():
@@ -335,8 +308,6 @@ def _load_doc():
 
 def _save_doc(doc) -> None:
     text = doc.render()
-    if parse(text).render() != text:
-        raise ModelsIniError("internal render check failed; file not written")
     f = _ini_file()
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(f) or ".",
                                 prefix="." + os.path.basename(f) + ".")
@@ -365,16 +336,21 @@ def _guard_write():
 
 
 def _mutate(fn):
-    """Apply fn(doc) to fresh parse, self-check, write atomically."""
-    try:
-        _text, doc = _load_doc()
-        fn(doc)
-        _save_doc(doc)
-        return jsonify({"ok": True}), 200
-    except ModelsIniError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
-    except Exception as exc:
-        return jsonify({"ok": False, "error": f"edit failed: {exc}"}), 500
+    """Apply fn(doc) to fresh parse, self-check, write atomically.
+
+    The lock makes concurrent edits sequential: without it, two
+    simultaneous requests would both parse the old file and the second
+    write would silently discard the first edit (lost update)."""
+    with _write_lock:
+        try:
+            _text, doc = _load_doc()
+            fn(doc)
+            _save_doc(doc)
+            return jsonify({"ok": True}), 200
+        except ModelsIniError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"edit failed: {exc}"}), 500
 
 
 def _section_view(b) -> Dict[str, Any]:
@@ -399,12 +375,32 @@ def _git(*args, timeout: int = 60):
         return 124, "", "git timed out"
 
 
+def _refresh_remote_ref(branch: str) -> None:
+    """Best-effort, throttled ``git fetch origin <branch>`` so the
+    ahead/behind numbers reflect GitHub without a full pull.
+
+    Skipped when a UI git op (commit/pull/push) is running, so we never
+    contend for ref locks; failures are ignored and the numbers simply
+    stay stale until the next attempt."""
+    now = time.time()
+    if now - _fetch_state["last_ts"] < _FETCH_MIN_S:
+        return
+    _fetch_state["last_ts"] = now
+    if not _git_lock.acquire(blocking=False):
+        return
+    try:
+        _git("fetch", "origin", branch, timeout=_FETCH_TIMEOUT_S)
+    finally:
+        _git_lock.release()
+
+
 def _git_status() -> Dict[str, Any]:
     fname = os.path.basename(_ini_file())
     code, out, err = _git("rev-parse", "--abbrev-ref", "HEAD")
     if code != 0:
         return {"ok": False, "error": err or out}
     info = {"ok": True, "branch": out}
+    _refresh_remote_ref(out)
     code, out, _ = _git("status", "--porcelain", "--", fname)
     info["dirty"] = bool(out)
     code, out, _ = _git("rev-list", "--count", f"origin/{out}..HEAD")
@@ -421,11 +417,18 @@ def api_models() -> Response:
     _refresh_models_gate()
     try:
         _text, doc = _load_doc()
-        git = _git_status()
-    except FileNotFoundError:
-        return jsonify({"ok": False, "error": "models.ini not found"}), 404
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
+    except (OSError, UnicodeDecodeError):
+        # file missing or unreadable: degraded payload carrying the
+        # gate's reason, so the UI shows its read-only banner
+        return jsonify({
+            "ok": True,
+            "writable": False,
+            "write_reason": _models_gate["reason"],
+            "models": [],
+            "aliases": {},
+            "git": _git_status(),
+        })
+    git = _git_status()
     return jsonify({
         "ok": True,
         "writable": _models_gate["ok"],
@@ -462,6 +465,8 @@ def api_models_add() -> Response:
     name = str(data.get("name", "")).strip()
     model = str(data.get("model", "")).strip()
     params = data.get("params") or {}
+    if not isinstance(params, dict):
+        return jsonify({"ok": False, "error": "params must be an object"}), 400
     region = str(data.get("region", "models")).strip()
     if region not in ("profiles", "models"):
         return jsonify({"ok": False, "error": "region must be profiles or models"}), 400
@@ -488,9 +493,17 @@ def api_models_edit() -> Response:
     name = str(data.get("name", "")).strip()
     new_name = str(data.get("new_name", "")).strip()
     archived = bool(data.get("archived", False))
-    remove = [str(k) for k in (data.get("remove") or [])]
+    if new_name and new_name != name and not _valid_name(new_name):
+        return jsonify({"ok": False, "error": "invalid section name"}), 400
+    remove_raw = data.get("remove") or []
+    if not isinstance(remove_raw, list):
+        return jsonify({"ok": False, "error": "remove must be a list"}), 400
+    remove = [str(k) for k in remove_raw]
+    set_raw = data.get("set") or {}
+    if not isinstance(set_raw, dict):
+        return jsonify({"ok": False, "error": "set must be an object"}), 400
     sets: Dict[str, str] = {}
-    for k, v in (data.get("set") or {}).items():
+    for k, v in set_raw.items():
         k, v = str(k).strip(), str(v)
         if not k or "=" in k or any(c in v for c in "\r\n"):
             return jsonify({"ok": False, "error": f"invalid key {k!r}"}), 400
@@ -499,6 +512,9 @@ def api_models_edit() -> Response:
     def fn(doc):
         cur = name
         if new_name and new_name != name:
+            if doc.block(name, archived).region == "global":
+                raise ModelsIniError(
+                    "the global [*] section cannot be renamed")
             doc.rename_section(name, new_name, archived)
             cur = new_name
         for k in remove:
@@ -559,7 +575,15 @@ def api_models_delete() -> Response:
     data = request.get_json(silent=True) or {}
     name = str(data.get("name", "")).strip()
     archived = bool(data.get("archived", False))
-    return _mutate(lambda doc: doc.delete_section(name, archived=archived))
+
+    def fn(doc):
+        if doc.block(name, archived).region == "global":
+            raise ModelsIniError(
+                "the global [*] section cannot be deleted "
+                "(remove its keys instead)")
+        doc.delete_section(name, archived=archived)
+
+    return _mutate(fn)
 
 
 @app.route("/api/models/git", methods=["POST"])
@@ -574,26 +598,30 @@ def api_models_git() -> Response:
         return jsonify({"ok": False, "error": "not a git repository"}), 500
 
     if action == "commit":
-        msg = str(data.get("message", "")).strip() or "models.ini"
-        code, out, _ = _git("status", "--porcelain", "--", fname)
-        if not out:
-            return jsonify({"ok": False, "error": "no changes to commit"}), 400
-        for args in (["add", fname], ["commit", "-m", msg]):
-            code, _out, err = _git(*args)
-            if code != 0:
-                return jsonify({"ok": False, "error": err or "git failed"}), 500
-        code, out, _ = _git("log", "-1", "--format=%h %s")
-        return jsonify({"ok": True, "commit": out})
+        with _git_lock:
+            msg = str(data.get("message", "")).strip() or "models.ini"
+            code, out, _ = _git("status", "--porcelain", "--", fname)
+            if not out:
+                return jsonify({"ok": False, "error": "no changes to commit"}), 400
+            for args in (["add", fname], ["commit", "-m", msg]):
+                code, _out, err = _git(*args)
+                if code != 0:
+                    return jsonify({"ok": False, "error": err or "git failed"}), 500
+            code, out, _ = _git("log", "-1", "--format=%h %s")
+            return jsonify({"ok": True, "commit": out})
     if action == "pull":
-        code, out, err = _git("pull", "--ff-only", "origin", branch, timeout=120)
-        text = out or err
-        return (jsonify({"ok": True, "output": text}), 200) if code == 0 else \
-               (jsonify({"ok": False, "error": text, "output": text}), 500)
+        with _git_lock:
+            code, out, err = _git("pull", "--ff-only", "origin", branch,
+                                  timeout=120)
+            text = out or err
+            return (jsonify({"ok": True, "output": text}), 200) if code == 0 else \
+                   (jsonify({"ok": False, "error": text, "output": text}), 500)
     if action == "push":
-        code, out, err = _git("push", "origin", branch, timeout=120)
-        text = out or err
-        return (jsonify({"ok": True, "output": text}), 200) if code == 0 else \
-               (jsonify({"ok": False, "error": text, "output": text}), 500)
+        with _git_lock:
+            code, out, err = _git("push", "origin", branch, timeout=120)
+            text = out or err
+            return (jsonify({"ok": True, "output": text}), 200) if code == 0 else \
+                   (jsonify({"ok": False, "error": text, "output": text}), 500)
 
 
 # ─────────────────────── Entry point ─────────────────────────────

@@ -518,10 +518,15 @@
       <summary class="mi-sum">Add section</summary>
       <div class="mi-add-body">
         <label class="mi-field"><span>name</span><input id="mi-add-name" class="mi-input" placeholder="My-Model"></label>
+        <label class="mi-field"><span>region</span>
+          <select id="mi-add-region" class="mi-input">
+            <option value="models" selected>models</option>
+            <option value="profiles">profiles</option>
+          </select></label>
         <label class="mi-field"><span>model</span><input id="mi-add-model" class="mi-input" placeholder="/mnt/ssd/llamacpp_models/...gguf"></label>
         <label class="mi-field"><span>params &mdash; one per line: key = value</span>
           <textarea id="mi-add-params" class="mi-input" rows="3" placeholder="temp = 0.7&#10;ctx-size = 131072"></textarea></label>
-        <button class="mini-btn mi-primary" onclick="miAdd()">add</button>
+        <button class="mini-btn mi-primary mi-writable" onclick="miAdd()">add</button>
         <div id="mi-add-status" class="restart-status"></div>
       </div>
     </details>
@@ -533,8 +538,8 @@
         <label class="mi-field"><span>section name</span><input id="mi-newname" class="mi-input"></label>
         <label class="mi-field"><span>model</span><input id="mi-model" class="mi-input"></label>
         <div class="mi-field"><span>params</span><div id="mi-params"></div>
-          <button class="mini-btn" onclick="miAddParam('','')">+ param</button></div>
-        <button class="mini-btn mi-primary" onclick="miSaveEdit()">save</button>
+          <button class="mini-btn mi-writable" onclick="miAddParam('','')">+ param</button></div>
+        <button class="mini-btn mi-primary mi-writable" onclick="miSaveEdit()">save</button>
         <div id="mi-edit-status" class="restart-status"></div>
       </div>
     </details>
@@ -555,17 +560,6 @@
         <button id="restart-btn" class="restart-btn" onclick="restartLlama()">Restart</button>
       </div>
       <div id="restart-status" class="restart-status"></div>
-
-      <hr class="adv-divider">
-
-      <div class="adv-row">
-        <div>
-          <div class="adv-svc-name">models_ini</div>
-          <div class="adv-svc-hint">/ssd/llamacpp_models/models_ini</div>
-        </div>
-        <button id="gitpull-btn" class="restart-btn" onclick="gitPullModels()">git pull</button>
-      </div>
-      <div id="gitpull-status" class="restart-status"></div>
     </div>
   </details>
 
@@ -819,7 +813,6 @@ function _advBtn(btnId, statusId, url, cooldownMs) {
 }
 
 function restartLlama()  { _advBtn('restart-btn',  'restart-status',  '/api/restart-llama',    30000); }
-function gitPullModels() { _advBtn('gitpull-btn',  'gitpull-status',  '/api/git-pull-models',  30000); }
 
 // ── models.ini editor ────────────────────────────────────────────
 var miData = null;          // last /api/models payload
@@ -1033,6 +1026,8 @@ function miMove(name, archived, target, position) {
   }).then(function (d) {
     miOpStatus('models-op-status', d.ok ? '' : d.error, !!d.ok);
     if (d.ok) miLoad();
+  }).catch(function () {
+    miOpStatus('models-op-status', 'network error', false);
   });
 }
 
@@ -1138,7 +1133,10 @@ function miLoad() {
   fetch('/api/models')
     .then(function (r) { return r.json(); })
     .then(function (d) {
-      if (d.models) miRender(d);
+      if (d.models) { miRender(d); return; }
+      var line = miEl('models-git-line');
+      line.textContent = 'models: ' + (d.error || 'load failed');
+      line.style.color = 'var(--crit)';
     })
     .catch(function () {
       miEl('models-git-line').textContent = 'models: load failed';
@@ -1154,6 +1152,8 @@ function miAct(action, name, isArchived) {
   miPost('/api/models/section/' + action, body).then(function (d) {
     miOpStatus('models-op-status', d.ok ? '' : d.error, !!d.ok);
     if (d.ok) miLoad();
+  }).catch(function () {
+    miOpStatus('models-op-status', 'network error', false);
   });
 }
 
@@ -1174,6 +1174,8 @@ function miGit(action) {
       input.value = '';
       input.focus();
     }
+  }).catch(function () {
+    miOpStatus('models-git-status', 'network error', false);
   });
 }
 
@@ -1227,7 +1229,8 @@ function miSaveEdit() {
   });
   var remove = [];
   Object.keys(miOriginal).forEach(function (k) {
-    if (k !== 'model' && !(k in set)) remove.push(k);
+    if (k === 'model') { if (!model) remove.push(k); return; }
+    if (!(k in set)) remove.push(k);
   });
   var body = { name: name, set: set, remove: remove, archived: miEditArchived };
   var nn = miEl('mi-newname').value.trim();
@@ -1236,29 +1239,39 @@ function miSaveEdit() {
   miPost('/api/models/section/edit', body).then(function (d) {
     miOpStatus('mi-edit-status', d.ok ? 'saved' : d.error, !!d.ok);
     if (d.ok) { miEl('mi-editor').open = false; miLoad(); }
+  }).catch(function () {
+    miOpStatus('mi-edit-status', 'network error', false);
   });
 }
 
 function miAdd() {
   var name  = miEl('mi-add-name').value.trim();
   var model = miEl('mi-add-model').value.trim();
+  var region = miEl('mi-add-region').value;
   var params = {};
+  var skipped = 0;
   miEl('mi-add-params').value.split('\n').forEach(function (line) {
     line = line.trim();
     if (!line) return;
     var idx = line.indexOf('=');
-    if (idx <= 0) return;
+    if (idx <= 0) { skipped++; return; }
     params[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
   });
   miOpStatus('mi-add-status', 'adding…', true);
-  miPost('/api/models/section/add', { name: name, model: model, params: params }).then(function (d) {
-    miOpStatus('mi-add-status', d.ok ? 'added' : d.error, !!d.ok);
+  miPost('/api/models/section/add',
+         { name: name, model: model, region: region, params: params }).then(function (d) {
+    miOpStatus('mi-add-status', d.ok
+      ? (skipped ? 'added (skipped ' + skipped + ' malformed param line'
+                 + (skipped > 1 ? 's' : '') + ')' : 'added')
+      : d.error, !!d.ok);
     if (d.ok) {
       miEl('mi-add-name').value = '';
       miEl('mi-add-model').value = '';
       miEl('mi-add-params').value = '';
       miLoad();
     }
+  }).catch(function () {
+    miOpStatus('mi-add-status', 'network error', false);
   });
 }
 

@@ -35,11 +35,10 @@ journalctl -u llama-dashboard -f
 sudo userdel jtop-web
 ```
 
-The two sudoers rules (paste into `/etc/sudoers.d/llama-dashboard` in step 3):
+The sudoers rule (paste into `/etc/sudoers.d/llama-dashboard` in step 3):
 
 ```
 llama-dashboard ALL=(ALL) NOPASSWD: /bin/systemctl restart llama-server.service
-llama-dashboard ALL=(ALL) NOPASSWD: /usr/bin/git -C /mnt/ssd/llamacpp_models/models_ini pull
 ```
 
 Notes:
@@ -88,15 +87,14 @@ Add a narrow sudoers rule:
 sudo visudo -f /etc/sudoers.d/llama-dashboard
 ```
 
-Paste these lines and save:
+Paste this line and save:
 
 ```
 llama-dashboard ALL=(ALL) NOPASSWD: /bin/systemctl restart llama-server.service
-llama-dashboard ALL=(ALL) NOPASSWD: /usr/bin/git -C /mnt/ssd/llamacpp_models/models_ini pull
 ```
 
-The first allows restarting only that service; the second (legacy) powers the old
-"git pull" button and is replaced by the deploy-key setup below.
+This allows restarting only that service. (All git operations use the
+deploy-key setup below — no sudo for git.)
 
 ### Enable the models.ini editor (deploy key — no more sudo for git)
 
@@ -123,8 +121,9 @@ sudo -u llama-dashboard git config -C /mnt/ssd/llamacpp_models/models_ini user.e
 sudo -u llama-dashboard git -C /mnt/ssd/llamacpp_models/models_ini pull --ff-only
 # (commit a no-op or a trivial edit to test push)
 
-# 6. The sudo git-pull line in /etc/sudoers.d/llama-dashboard is now legacy —
-#    remove it (keep the systemctl line).
+# 6. If a sudo git-pull line from an older version still exists in
+#    /etc/sudoers.d/llama-dashboard, remove it (the dashboard no longer
+#    uses sudo for git).
 ```
 
 ## 4. Install and start the systemd unit
@@ -173,6 +172,6 @@ sudo systemctl disable --now llama-dashboard
 
 ## Switching to direct-bind (no Serve)
 
-See the "Switching exposure" section in CLAUDE.md.  
-Short version: set `BIND_HOST` in `app.py` to the Tailscale IP, stop `serve`,
-add `After=tailscaled.service` + `Wants=tailscaled.service` to the unit.
+Set `BIND_HOST` in `app.py` to the Tailscale IP (e.g. `100.x.y.z`), stop
+`serve`, and add `After=tailscaled.service` + `Wants=tailscaled.service`
+to the unit.

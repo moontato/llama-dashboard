@@ -140,11 +140,45 @@ class Edits(unittest.TestCase):
         self._stable()
 
     def test_rename_archived(self):
-        # [Coding-Bot] exists only in ARCHIVED MODELS
+        # [Coding-Bot] exists only in ARCHIVED PROFILES
         self.doc.rename_section("Coding-Bot", "Coding-Bot-x", archived=True)
         self.assertEqual(
             self.doc.block("Coding-Bot-x", archived=True).name,
             "Coding-Bot-x")
+        # the '#' header prefix must survive, or reparse reclassifies the
+        # section as active with all its keys still commented out
+        text = self.doc.render()
+        self.assertIn("# [Coding-Bot-x]", text)
+        self.assertTrue(parse(text).block("Coding-Bot-x", archived=True)
+                        .archived)
+        self._stable()
+
+    def test_upsert_archived_existing_updates_commented_in_place(self):
+        self.doc.upsert_key("gemma-4-26B", "image-min-tokens", "301",
+                            archived=True)
+        lines = self.doc.render().splitlines()
+        self.assertIn("# image-min-tokens = 301", lines)
+        # no uncommented duplicate leaking into the file (a real INI parser
+        # would attribute it to the active section above)
+        self.assertNotIn("image-min-tokens = 301", lines)
+        self.assertEqual(len([l for l in lines
+                              if "image-min-tokens" in l]), 1)
+        keys = dict(self.doc.block("gemma-4-26B", archived=True).keys())
+        self.assertEqual(keys["image-min-tokens"], "301")
+        self._stable()
+
+    def test_upsert_archived_new_key_stays_commented(self):
+        self.doc.upsert_key("gemma-4-26B", "zz_test", "1", archived=True)
+        lines = self.doc.render().splitlines()
+        self.assertIn("# zz_test = 1", lines)
+        self.assertNotIn("zz_test = 1", lines)
+        self._stable()
+
+    def test_remove_key_archived_existing(self):
+        self.doc.remove_key("gemma-4-26B", "image-min-tokens",
+                            archived=True)
+        keys = dict(self.doc.block("gemma-4-26B", archived=True).keys())
+        self.assertNotIn("image-min-tokens", keys)
         self._stable()
 
     def test_rename_collision_from_archived(self):

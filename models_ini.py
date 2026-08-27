@@ -95,6 +95,25 @@ class Block:
                 out.append((m.group("key"), m.group(2).strip()))
         return out
 
+    def key_index(self, key: str) -> int:
+        """Index of the first body line defining ``key`` (-1 if absent).
+
+        Archived-aware: in archived blocks the commented form
+        (``# key = value``) is uncommented before matching, so edits and
+        removals hit the commented line in place instead of appending an
+        uncommented duplicate."""
+        for i, line in enumerate(self.body):
+            core = line.strip()
+            if not core or core[0] in "#;":
+                if self.archived and core.startswith("#"):
+                    core = _uncomment(line).strip()
+                else:
+                    continue
+            m = _KEY_RE.match(core)
+            if m and m.group("key") == key:
+                return i
+        return -1
+
 
 @dataclass
 class Document:
@@ -427,35 +446,27 @@ class Document:
         b = self.block(name, archived)
         if new != name and any(x is not b and x.name == new for x in self.blocks):
             raise ModelsIniError(f"section [{new}] already exists")
-        b.header = f"[{new}]{_eol(b.header)}"
+        # keep the '#' prefix of archived headers, or reparse would turn
+        # the section active (with all its keys still commented out)
+        b.header = ("# " if b.archived else "") + f"[{new}]{_eol(b.header)}"
         b.name = new
 
     def upsert_key(self, name: str, key: str, value: str,
                    archived: bool = False) -> None:
         b = self.block(name, archived)
-        line_eol = "\n"
-        for i, line in enumerate(b.body):
-            core = line.strip()
-            if not core or core[0] in "#;":
-                continue
-            m = _KEY_RE.match(core)
-            if m and m.group("key") == key:
-                line_eol = _eol(line)
-                b.body[i] = f"{key} = {value}{line_eol}"
-                return
-        b.body.append(f"{key} = {value}{line_eol}")
+        prefix = "# " if b.archived else ""
+        i = b.key_index(key)
+        if i >= 0:
+            b.body[i] = prefix + f"{key} = {value}{_eol(b.body[i])}"
+        else:
+            b.body.append(prefix + f"{key} = {value}\n")
 
     def remove_key(self, name: str, key: str, archived: bool = False) -> None:
         b = self.block(name, archived)
-        for i, line in enumerate(b.body):
-            core = line.strip()
-            if not core or core[0] in "#;":
-                continue
-            m = _KEY_RE.match(core)
-            if m and m.group("key") == key:
-                del b.body[i]
-                return
-        raise ModelsIniError(f"key '{key}' not found in [{name}]")
+        i = b.key_index(key)
+        if i < 0:
+            raise ModelsIniError(f"key '{key}' not found in [{name}]")
+        del b.body[i]
 
 
 # ─────────────────────── Parser ──────────────────────────────────

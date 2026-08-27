@@ -98,6 +98,13 @@ class ApiTestCase(unittest.TestCase):
         r = self.client.get("/api/models/backup")
         self.assertEqual(r.status_code, 404)
 
+    def test_gate_blocks_on_binary_junk(self):
+        (Path(self.tmp) / "models.ini").write_bytes(b"\x00\x01\xff\xfe\xfd")
+        code, d = self.get()
+        self.assertEqual(code, 200)
+        self.assertFalse(d["writable"])
+        self.assertIn("cannot read", d["write_reason"])
+
     def test_gate_blocks_on_junk_and_recovers(self):
         junk = Path(self.tmp) / "models.ini"
         junk.write_text("hello\n", encoding="utf-8")
@@ -211,6 +218,60 @@ class ApiTestCase(unittest.TestCase):
                  if s["name"] == "gemma-4-26B" and s["archived"]]
         self.assertEqual(dict((kv["key"], kv["value"])
                               for kv in twins[0]["keys"])["zz_test"], "1")
+
+    def test_edit_archived_existing_key_stays_commented(self):
+        code, d = self.post("/api/models/section/edit", {
+            "name": "gemma-4-26B", "archived": True,
+            "set": {"image-min-tokens": "301"},
+        })
+        self.assertEqual(code, 200)
+        lines = self.read_file().splitlines()
+        self.assertIn("# image-min-tokens = 301", lines)
+        self.assertNotIn("image-min-tokens = 301", lines)
+        self.assert_roundtrip()
+
+    def test_edit_archived_remove_key(self):
+        code, d = self.post("/api/models/section/edit", {
+            "name": "gemma-4-26B", "archived": True,
+            "remove": ["image-min-tokens"],
+        })
+        self.assertEqual(code, 200)
+        s = [x for x in self.get()[1]["models"]
+             if x["name"] == "gemma-4-26B" and x["archived"]][0]
+        self.assertNotIn(
+            "image-min-tokens", [kv["key"] for kv in s["keys"]])
+        self.assert_roundtrip()
+
+    def test_edit_rename_invalid_new_name(self):
+        before = self.read_file()
+        code, d = self.post("/api/models/section/edit", {
+            "name": "Qwen3.5-4B", "new_name": "bad name"})
+        self.assertEqual(code, 400)
+        self.assertEqual(self.read_file(), before)
+
+    def test_edit_global_section_protected(self):
+        before = self.read_file()
+        code, d = self.post("/api/models/section/edit",
+                            {"name": "*", "new_name": "defaults"})
+        self.assertEqual(code, 400)
+        self.assertIn("global", d["error"])
+        code, d = self.post("/api/models/section/delete", {"name": "*"})
+        self.assertEqual(code, 400)
+        self.assertIn("global", d["error"])
+        self.assertEqual(self.read_file(), before)
+        self.assertIn("[*]", before)
+
+    def test_bad_json_types_rejected(self):
+        code, d = self.post("/api/models/section/add",
+                            {"name": "X", "model": "/x", "params": [1, 2]})
+        self.assertEqual(code, 400)
+        code, d = self.post("/api/models/section/edit",
+                            {"name": "Qwen3.5-4B", "set": [1, 2]})
+        self.assertEqual(code, 400)
+        code, d = self.post("/api/models/section/edit",
+                            {"name": "Qwen3.5-4B", "remove": "x"})
+        self.assertEqual(code, 400)
+        self.assertEqual(self.read_file(), ORIGINAL)
 
     def test_edit_wrong_state_rejected(self):
         before = self.read_file()
@@ -422,6 +483,16 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(g["ahead"], 1)
         self.assertEqual(g["behind"], 1)
         self.assertEqual(g["last_commit"], "abc123 fake commit")
+
+    def test_git_status_refreshes_remote_ref(self):
+        # GET must trigger a throttled `git fetch origin <branch>` so the
+        # ahead/behind numbers track GitHub without a full pull
+        self.fake_status = "0"
+        self._install_fake_git()
+        self.app_mod._fetch_state["last_ts"] = 0.0
+        code, d = self.get()
+        self.assertEqual(code, 200)
+        self.assertIn(["fetch", "origin", "main"], self._git_calls())
 
 
 if __name__ == "__main__":
