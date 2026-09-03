@@ -405,6 +405,8 @@
       display: flex; flex-direction: column; align-items: center; gap: 1px;
       flex: 0 0 auto; user-select: none;
     }
+    .mi-copy-row { display: flex; gap: 0.4rem; align-items: center; }
+    .mi-copy-row select { flex: 1; min-width: 0; }
     details.mi-disc { margin-bottom: 0.5rem; }
     .mi-sum {
       list-style: none; display: flex; align-items: center; justify-content: space-between;
@@ -540,10 +542,18 @@
       <div class="mi-edit-body">
         <input type="hidden" id="mi-name">
         <label class="mi-field"><span>section name</span><input id="mi-newname" class="mi-input"></label>
+        <div class="mi-field"><span>copy configuration from</span>
+          <div class="mi-copy-row">
+            <select id="mi-copy-from" class="mi-input mi-writable"></select>
+            <button class="mini-btn mi-writable" onclick="miCopyFrom()">copy</button>
+          </div></div>
         <label class="mi-field"><span>model</span><input id="mi-model" class="mi-input"></label>
         <div class="mi-field"><span>params</span><div id="mi-params"></div>
           <button class="mini-btn mi-writable" onclick="miAddParam('','')">+ param</button></div>
-        <button class="mini-btn mi-primary mi-writable" onclick="miSaveEdit()">save</button>
+        <div class="mini-actions">
+          <button class="mini-btn mi-primary mi-writable" onclick="miSaveEdit()">save</button>
+          <button class="mini-btn" onclick="miRevertEdit()">discard changes</button>
+        </div>
         <div id="mi-edit-status" class="restart-status"></div>
       </div>
     </details>
@@ -1301,6 +1311,58 @@ function miAddParam(key, value) {
   miRefreshParamSteps();
 }
 
+function miBuildCopySelect(currentIndex) {
+  var sel = miEl('mi-copy-from');
+  sel.innerHTML = '';
+  var ph = document.createElement('option');
+  ph.value = '';
+  ph.textContent = '(pick a section to copy from\u2026)';
+  ph.disabled = true;
+  ph.selected = true;
+  sel.appendChild(ph);
+  miData.models.forEach(function (s, i) {
+    if (i === currentIndex) return;   // never copy a section from itself
+    var opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = s.name + (s.archived ? '  (archived)' : '');
+    sel.appendChild(opt);
+  });
+}
+
+function miCopyFrom() {
+  var sel = miEl('mi-copy-from');
+  var i = parseInt(sel.value, 10);
+  var s = miData.models[i];
+  if (!s) {
+    miOpStatus('mi-edit-status', 'pick a section to copy from first', false);
+    return;
+  }
+  miEl('mi-model').value = s.model || '';
+  var box = miEl('mi-params');
+  box.innerHTML = '';
+  s.keys.forEach(function (kv) {
+    if (kv.key === 'model') return;
+    box.appendChild(miParamRow(kv.key, kv.value));
+  });
+  miRefreshParamSteps();
+  miOpStatus('mi-edit-status', 'copied from [' + s.name +
+    '] \u2014 review, then save', true);
+}
+
+function miRevertEdit() {
+  if (!miOriginal) return;
+  miEl('mi-newname').value = miEl('mi-name').value.trim();
+  miEl('mi-model').value = miOriginal.model || '';
+  var box = miEl('mi-params');
+  box.innerHTML = '';
+  Object.keys(miOriginal).forEach(function (k) {
+    if (k === 'model') return;
+    box.appendChild(miParamRow(k, miOriginal[k]));
+  });
+  miRefreshParamSteps();
+  miOpStatus('mi-edit-status', 'changes discarded', true);
+}
+
 function miEdit(i) {
   var s = miData.models[i];
   miEditArchived = !!s.archived;
@@ -1315,6 +1377,7 @@ function miEdit(i) {
     miOriginal[kv.key] = kv.value;
     box.appendChild(miParamRow(kv.key, kv.value));
   });
+  miBuildCopySelect(i);
   miRefreshParamSteps();
   miOpStatus('mi-edit-status', '', true);
   var ed = miEl('mi-editor');
