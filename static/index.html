@@ -529,6 +529,11 @@
             <option value="models" selected>models</option>
             <option value="profiles">profiles</option>
           </select></label>
+        <div class="mi-field"><span>copy configuration from</span>
+          <div class="mi-copy-row">
+            <select id="mi-add-copy-from" class="mi-input mi-writable"></select>
+            <button class="mini-btn mi-writable" onclick="miAddCopyFrom()">copy</button>
+          </div></div>
         <label class="mi-field"><span>model</span><input id="mi-add-model" class="mi-input" placeholder="/mnt/ssd/llamacpp_models/...gguf"></label>
         <label class="mi-field"><span>params &mdash; one per line: key = value</span>
           <textarea id="mi-add-params" class="mi-input" rows="3" placeholder="temp = 0.7&#10;ctx-size = 131072"></textarea></label>
@@ -1056,6 +1061,7 @@ function miStep(i, dir) {
 function miRender(d) {
   var prev = miData;
   miData = d;
+  miBuildAddCopySelect();
   var line = miEl('models-git-line');
   if (d.git && d.git.ok) {
     var bits = [d.git.branch, d.git.dirty ? 'dirty' : 'clean'];
@@ -1311,8 +1317,7 @@ function miAddParam(key, value) {
   miRefreshParamSteps();
 }
 
-function miBuildCopySelect(currentIndex) {
-  var sel = miEl('mi-copy-from');
+function miFillCopyOptions(sel, excludeIndex) {
   sel.innerHTML = '';
   var ph = document.createElement('option');
   ph.value = '';
@@ -1321,12 +1326,20 @@ function miBuildCopySelect(currentIndex) {
   ph.selected = true;
   sel.appendChild(ph);
   miData.models.forEach(function (s, i) {
-    if (i === currentIndex) return;   // never copy a section from itself
+    if (i === excludeIndex) return;   // skip the excluded section (copy self)
     var opt = document.createElement('option');
     opt.value = String(i);
     opt.textContent = s.name + (s.archived ? '  (archived)' : '');
     sel.appendChild(opt);
   });
+}
+
+function miBuildCopySelect(currentIndex) {
+  miFillCopyOptions(miEl('mi-copy-from'), currentIndex);
+}
+
+function miBuildAddCopySelect() {
+  miFillCopyOptions(miEl('mi-add-copy-from'));   // no exclusion: new section
 }
 
 function miCopyFrom() {
@@ -1414,6 +1427,24 @@ function miSaveEdit() {
   }).catch(function () {
     miOpStatus('mi-edit-status', 'network error', false);
   });
+}
+
+function miAddCopyFrom() {
+  var sel = miEl('mi-add-copy-from');
+  var i = parseInt(sel.value, 10);
+  var s = miData.models[i];
+  if (!s) {
+    miOpStatus('mi-add-status', 'pick a section to copy from first', false);
+    return;
+  }
+  miEl('mi-add-model').value = s.model || '';
+  var lines = [];
+  s.keys.forEach(function (kv) {
+    if (kv.key === 'model') return;
+    lines.push(kv.key + ' = ' + kv.value);
+  });
+  miEl('mi-add-params').value = lines.join('\n');
+  miOpStatus('mi-add-status', 'copied from [' + s.name + ']', true);
 }
 
 function miAdd() {
