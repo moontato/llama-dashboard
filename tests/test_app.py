@@ -242,6 +242,55 @@ class ApiTestCase(unittest.TestCase):
             "image-min-tokens", [kv["key"] for kv in s["keys"]])
         self.assert_roundtrip()
 
+    def test_edit_reorder_keys(self):
+        code, d = self.post("/api/models/section/edit", {
+            "name": "General-Bot-small",
+            "set": {},
+            "key_order": ["top-p", "parallel", "reasoning", "temp",
+                          "top-k", "ctx-size", "mmproj"],
+        })
+        self.assertEqual(code, 200)
+        self.assertTrue(d["ok"])
+        self.assert_roundtrip()
+        s = self._section(self.get()[1], "General-Bot-small")
+        self.assertEqual([kv["key"] for kv in s["keys"]],
+                         ["model", "top-p", "parallel", "reasoning",
+                          "temp", "top-k", "ctx-size", "mmproj"])
+
+    def test_edit_reorder_with_value_change(self):
+        code, d = self.post("/api/models/section/edit", {
+            "name": "General-Bot-small",
+            "set": {"temp": "0.7"},
+            "key_order": ["temp", "top-p", "parallel", "reasoning",
+                          "top-k", "ctx-size", "mmproj"],
+        })
+        self.assertEqual(code, 200)
+        self.assert_roundtrip()
+        s = self._section(self.get()[1], "General-Bot-small")
+        keys = {kv["key"]: kv["value"] for kv in s["keys"]}
+        self.assertEqual(keys["temp"], "0.7")
+        self.assertEqual([kv["key"] for kv in s["keys"]],
+                         ["model", "temp", "top-p", "parallel", "reasoning",
+                          "top-k", "ctx-size", "mmproj"])
+
+    def test_edit_reorder_noop_keeps_file(self):
+        before = self.read_file()
+        code, d = self.post("/api/models/section/edit", {
+            "name": "General-Bot-small",
+            "key_order": ["parallel", "reasoning", "temp", "top-p",
+                          "top-k", "ctx-size", "mmproj"],
+        })
+        self.assertEqual(code, 200)
+        self.assertTrue(d["ok"])
+        self.assertEqual(self.read_file(), before)
+
+    def test_edit_reorder_bad_type_rejected(self):
+        before = self.read_file()
+        code, d = self.post("/api/models/section/edit",
+                            {"name": "General-Bot-small", "key_order": "x"})
+        self.assertEqual(code, 400)
+        self.assertEqual(self.read_file(), before)
+
     def test_edit_rename_invalid_new_name(self):
         before = self.read_file()
         code, d = self.post("/api/models/section/edit", {

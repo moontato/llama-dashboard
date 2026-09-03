@@ -114,6 +114,25 @@ class Block:
                 return i
         return -1
 
+    def key_lines(self) -> List[Optional[str]]:
+        """For each body line, the key it defines, or ``None`` when the
+        line is not an effective key line (blank, comment, ...).
+
+        Mirrors the exact classification used by :meth:`keys` and
+        :meth:`key_index`, including the archived (commented) form, so a
+        line counts as a key line here iff it is one for those."""
+        out: List[Optional[str]] = []
+        for line in self.body:
+            core = line.strip()
+            if self.archived and core.startswith("#"):
+                core = _uncomment(line).strip()
+            if not core or core[0] in "#;":
+                out.append(None)
+                continue
+            m = _KEY_RE.match(core)
+            out.append(m.group("key") if m else None)
+        return out
+
 
 @dataclass
 class Document:
@@ -467,6 +486,40 @@ class Document:
         if i < 0:
             raise ModelsIniError(f"key '{key}' not found in [{name}]")
         del b.body[i]
+
+    def reorder_keys(self, name: str, order: List[str],
+                     archived: bool = False) -> None:
+        """Reorder the effective key lines of section ``name`` so that the
+        keys named in ``order`` appear in that relative order.
+
+        Only the key lines are permuted, and only among the key-line
+        slots: the ``model`` line and any non-key line (comment, blank,
+        marker) keep their positions, so the surrounding bytes are
+        untouched. The operation is deliberately lenient so it can never
+        block or corrupt an edit -- keys named in ``order`` that are not
+        present are ignored, and keys it omits keep their current
+        relative order. An order that matches the current arrangement is
+        a no-op. A section with a duplicated key is left untouched (its
+        key lines cannot be told apart by name)."""
+        b = self.block(name, archived)
+        kl = b.key_lines()
+        slots = [i for i, k in enumerate(kl) if k is not None and k != "model"]
+        cur = [kl[i] for i in slots]
+        if len(set(cur)) != len(cur):
+            return                      # duplicate keys: not reorderable
+        cur_set = set(cur)
+        seen: set = set()
+        target: List[str] = []
+        for k in order:
+            if k in cur_set and k not in seen:
+                target.append(k)
+                seen.add(k)
+        target += [k for k in cur if k not in seen]
+        if target == cur:
+            return
+        by_key = {k: b.body[i] for i, k in zip(slots, cur)}
+        for i, k in zip(slots, target):
+            b.body[i] = by_key[k]
 
 
 # ─────────────────────── Parser ──────────────────────────────────

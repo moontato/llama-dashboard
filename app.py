@@ -508,6 +508,10 @@ def api_models_edit() -> Response:
         if not k or "=" in k or any(c in v for c in "\r\n"):
             return jsonify({"ok": False, "error": f"invalid key {k!r}"}), 400
         sets[k] = v
+    order_raw = data.get("key_order") or []
+    if not isinstance(order_raw, list):
+        return jsonify({"ok": False, "error": "key_order must be a list"}), 400
+    key_order = [str(k).strip() for k in order_raw]
 
     def fn(doc):
         cur = name
@@ -525,6 +529,9 @@ def api_models_edit() -> Response:
                     pass        # key absence on remove is not an error
         for k, v in sets.items():
             doc.upsert_key(cur, k, v, archived)
+        # reorder last, once the section holds its final set of keys
+        if key_order:
+            doc.reorder_keys(cur, key_order, archived)
 
     return _mutate(fn)
 

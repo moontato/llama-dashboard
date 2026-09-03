@@ -732,5 +732,110 @@ class MoveSection(unittest.TestCase):
             self.doc.move_section("Qwen3.5-4B", "no-such", "after")
 
 
+# A single-block document with a non-key line wedged between key lines:
+# the reorder must permute only the key lines and leave the note in the
+# slot it currently occupies.
+REORDER_DOC = (
+    "[Solo]\n"
+    "model = /x/s.gguf\n"
+    "temp = 1.0\n"
+    "# note between temp and top-p\n"
+    "top-p = 0.95\n"
+    "top-k = 64\n"
+)
+
+
+class ReorderKeys(unittest.TestCase):
+    def setUp(self):
+        self.doc = parse(TEXT)
+
+    def _stable(self):
+        text = self.doc.render()
+        self.assertEqual(parse(text).render(), text)
+        return text
+
+    def test_key_lines_classification(self):
+        b = parse(REORDER_DOC).block("Solo")
+        self.assertEqual(b.key_lines(),
+                         ["model", "temp", None, "top-p", "top-k"])
+
+    def test_reorder_basic(self):
+        self.doc.reorder_keys(
+            "General-Bot-small",
+            ["top-p", "parallel", "reasoning", "temp", "top-k",
+             "ctx-size", "mmproj"])
+        b = self.doc.block("General-Bot-small")
+        self.assertEqual([k for k, _ in b.keys()],
+                         ["model", "top-p", "parallel", "reasoning",
+                          "temp", "top-k", "ctx-size", "mmproj"])
+        # values travel with their key, model untouched
+        self.assertEqual(dict(b.keys())["model"],
+                         "/mnt/ssd/llamacpp_models/gemma-4-26B-A4B-it-"
+                         "qat-UD-Q4_K_XL.gguf")
+        self.assertEqual(dict(b.keys())["top-p"], "0.95")
+        self._stable()
+
+    def test_reorder_model_stays_first(self):
+        self.doc.reorder_keys("General-Bot-small",
+                              ["mmproj", "ctx-size", "top-k", "top-p",
+                               "temp", "reasoning", "parallel"])
+        b = self.doc.block("General-Bot-small")
+        self.assertEqual(b.keys()[0][0], "model")
+        self.assertEqual(b.body[0].split(" = ", 1)[0], "model")
+        self._stable()
+
+    def test_reorder_preserves_interleaved_comment(self):
+        doc = parse(REORDER_DOC)
+        doc.reorder_keys("Solo", ["top-k", "top-p", "temp"])
+        lines = doc.render().splitlines()
+        # the note keeps its body slot; the key lines permute around it
+        self.assertEqual(lines[2], "top-k = 64")
+        self.assertEqual(lines[3], "# note between temp and top-p")
+        self.assertEqual(lines[4], "top-p = 0.95")
+        self.assertEqual(lines[5], "temp = 1.0")
+        self.assertEqual(parse(doc.render()).render(), doc.render())
+
+    def test_reorder_noop(self):
+        before = self.doc.render()
+        self.doc.reorder_keys("General-Bot-small",
+                              ["parallel", "reasoning", "temp", "top-p",
+                               "top-k", "ctx-size", "mmproj"])
+        self.assertEqual(self.doc.render(), before)
+
+    def test_reorder_empty_order_noop(self):
+        before = self.doc.render()
+        self.doc.reorder_keys("General-Bot-small", [])
+        self.assertEqual(self.doc.render(), before)
+
+    def test_reorder_ignores_unknown_and_keeps_omitted(self):
+        self.doc.reorder_keys("General-Bot-small",
+                              ["top-p", "bogus-key", "parallel"])
+        keys = [k for k, _ in
+                self.doc.block("General-Bot-small").keys()]
+        # bogus-key ignored; the unlisted keys keep their relative order
+        self.assertEqual(keys, ["model", "top-p", "parallel", "reasoning",
+                                "temp", "top-k", "ctx-size", "mmproj"])
+        self._stable()
+
+    def test_reorder_archived_stays_commented(self):
+        self.doc.reorder_keys("gemma-4-26B",
+                              ["image-max-tokens", "image-min-tokens"],
+                              archived=True)
+        lines = self.doc.render().splitlines()
+        self.assertIn("# image-max-tokens = 512", lines)
+        self.assertIn("# image-min-tokens = 300", lines)
+        # the max line now precedes the min line, both still commented
+        self.assertLess(lines.index("# image-max-tokens = 512"),
+                        lines.index("# image-min-tokens = 300"))
+        self.assertNotIn("image-max-tokens = 512", lines)
+        self.assertTrue(self.doc.block("gemma-4-26B",
+                                       archived=True).archived)
+        self._stable()
+
+    def test_reorder_unknown_section(self):
+        with self.assertRaises(ModelsIniError):
+            self.doc.reorder_keys("no-such", ["a"])
+
+
 if __name__ == "__main__":
     unittest.main()
