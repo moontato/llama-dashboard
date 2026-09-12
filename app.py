@@ -4,6 +4,7 @@ import contextlib
 import json
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import threading
@@ -217,9 +218,83 @@ def stream() -> Response:
     )
 
 
+# ── Systemd log streaming ────────────────────────────────────
+
+_LOG_LOCK      = threading.Lock()
+_LOG_STATE     = {"pid": None, "running": False}
+_LOG_MIN_S     = 2  # minimum seconds between log stream startups
+
+
+def _stop_log_stream() -> None:
+    """Kill any running journalctl subprocess."""
+    with _LOG_LOCK:
+        pid = _LOG_STATE["pid"]
+        if pid is not None:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
+            _LOG_STATE["pid"] = None
+            _LOG_STATE["running"] = False
+
+
 @app.route("/healthz")
 def healthz() -> Response:
     return "ok"
+
+
+@app.route("/api/logs/llama-server")
+def logs_llama_server() -> Response:
+    """SSE endpoint that streams journalctl output for llama-server.service."""
+    def generate() -> Any:
+        import signal as sig  # noqa: PLC0415
+
+        _stop_log_stream()
+        try:
+            proc = subprocess.Popen(
+                ["sudo", "journalctl", "-f", "-u", "llama-server.service",
+                 "--no-pager", "--no-hostname"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,  # line-buffered
+            )
+        except Exception as exc:
+            yield "data: [error] " + str(exc) + "\n\n"
+            return
+
+        with _LOG_LOCK:
+            _LOG_STATE["pid"] = proc.pid
+            _LOG_STATE["running"] = True
+
+        # Send a heartbeat every 15s so proxies don't kill the connection
+        heartbeat = threading.Timer(15.0, lambda: (yield "data: \n\n"))
+        heartbeat.daemon = True
+        heartbeat.start()
+
+        try:
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                yield "data: " + line + "\n\n"
+        except (BrokenPipeError, GeneratorExit):
+            pass
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+            with _LOG_LOCK:
+                _LOG_STATE["pid"] = None
+                _LOG_STATE["running"] = False
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control":     "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.route("/api/restart-llama", methods=["POST"])

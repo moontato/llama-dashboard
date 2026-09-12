@@ -285,6 +285,48 @@
     .restart-status.ok  { color: var(--ok);   }
     .restart-status.err { color: var(--crit); }
 
+    /* ── Log viewer dialog ─────────────────────────────────── */
+    #log-dialog { display: none; margin-top: 0.65rem; }
+    #log-dialog.open { display: block; }
+    .log-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 0.4rem;
+    }
+    .log-title { font-size: 0.72rem; font-weight: 600; color: var(--text); }
+    .log-status {
+      font-size: 0.62rem; display: inline-flex; align-items: center; gap: 0.3rem;
+    }
+    .log-dot {
+      display: inline-block; width: 6px; height: 6px;
+      border-radius: 50%; background: var(--muted);
+    }
+    .log-dot.streaming  { background: var(--ok); animation: pulse 1.5s infinite; }
+    .log-dot.stopped    { background: var(--muted); }
+    .log-dot.error      { background: var(--crit); }
+    .log-actions { display: flex; gap: 0.3rem; }
+    .log-btn {
+      font-family: inherit; font-size: 0.65rem; padding: 0.15rem 0.5rem;
+      border-radius: 4px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); cursor: pointer;
+    }
+    .log-btn:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    .log-btn.active { color: var(--ok); border-color: var(--ok); }
+    .log-btn.danger { color: var(--crit); border-color: var(--crit); }
+    #log-viewer {
+      font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+      font-size: 0.68rem; line-height: 1.45;
+      background: #0a0a0f; border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.5rem;
+      max-height: 320px; overflow-y: auto;
+      white-space: pre-wrap; word-break: break-all;
+      color: var(--muted);
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    #log-viewer::-webkit-scrollbar { width: 6px; }
+    #log-viewer::-webkit-scrollbar-track { background: transparent; }
+    #log-viewer::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
     .adv-divider { border: none; border-top: 1px solid var(--border); margin: 0.75rem 0; }
 
     /* ── models.ini editor ─────────────────────────────────── */
@@ -579,6 +621,26 @@
         <button id="restart-btn" class="restart-btn" onclick="restartLlama()">Restart</button>
       </div>
       <div id="restart-status" class="restart-status"></div>
+
+      <hr class="adv-divider">
+
+      <div class="log-header">
+        <div class="log-title">llama-server logs</div>
+        <div class="log-actions">
+          <button class="log-btn" id="log-toggle-btn" onclick="logToggle()">▶ Logs</button>
+        </div>
+      </div>
+      <div id="log-dialog">
+        <div class="log-status">
+          <span class="log-dot stopped" id="log-dot"></span>
+          <span id="log-status-text">stopped</span>
+        </div>
+        <div class="log-actions" style="margin-top:0.3rem;">
+          <button class="log-btn" onclick="logStop()" id="log-stop-btn" disabled>Stop</button>
+          <button class="log-btn danger" onclick="logClear()" id="log-clear-btn" disabled>Clear</button>
+        </div>
+        <div id="log-viewer"></div>
+      </div>
     </div>
   </details>
 
@@ -832,6 +894,97 @@ function _advBtn(btnId, statusId, url, cooldownMs) {
 }
 
 function restartLlama()  { _advBtn('restart-btn',  'restart-status',  '/api/restart-llama',    30000); }
+
+// ── llama-server log viewer ─────────────────────────────────
+var _logEs     = null;
+var _logOpen   = false;
+var _logPaused = false;
+var _logScroll = true;
+
+function logToggle() {
+  var btn = document.getElementById('log-toggle-btn');
+  var dlg = document.getElementById('log-dialog');
+  _logOpen = !_logOpen;
+  if (_logOpen) {
+    dlg.classList.add('open');
+    btn.textContent = '▼ Logs';
+    if (!_logEs) logStart();
+  } else {
+    dlg.classList.remove('open');
+    btn.textContent = '▶ Logs';
+    logStop();
+  }
+}
+
+function logStart() {
+  if (_logEs) return;
+  logSetStatus('connecting', 'stopped');
+  _logEs = new EventSource('/api/logs/llama-server');
+
+  _logEs.onopen = function () {
+    logSetStatus('streaming', 'connected');
+    document.getElementById('log-stop-btn').disabled = false;
+    document.getElementById('log-clear-btn').disabled = false;
+  };
+
+  _logEs.onmessage = function (evt) {
+    var line = evt.data;
+    if (!line) return;  // heartbeat
+    var viewer = document.getElementById('log-viewer');
+    viewer.textContent += line + '\n';
+    if (_logScroll && !_logPaused) {
+      viewer.scrollTop = viewer.scrollHeight;
+    }
+    // Limit buffer — keep last ~2000 lines
+    var max = 2000;
+    var lines = viewer.textContent.split('\n');
+    if (lines.length > max) {
+      viewer.textContent = lines.slice(lines.length - max).join('\n') + '\n';
+    }
+  };
+
+  _logEs.onerror = function () {
+    logSetStatus('error', 'disconnected');
+    _logEs.close();
+    _logEs = null;
+    document.getElementById('log-stop-btn').disabled = true;
+    document.getElementById('log-clear-btn').disabled = true;
+  };
+}
+
+function logStop() {
+  if (_logEs) {
+    _logEs.close();
+    _logEs = null;
+  }
+  logSetStatus('stopped', 'stopped');
+  document.getElementById('log-stop-btn').disabled = true;
+  document.getElementById('log-clear-btn').disabled = true;
+}
+
+function logClear() {
+  document.getElementById('log-viewer').textContent = '';
+}
+
+function logSetStatus(state, text) {
+  var dot  = document.getElementById('log-dot');
+  var txt  = document.getElementById('log-status-text');
+  var btn  = document.getElementById('log-toggle-btn');
+  dot.className = 'log-dot ' + state;
+  txt.textContent = text;
+  if (state === 'streaming') {
+    btn.classList.add('active');
+  } else {
+    btn.classList.remove('active');
+  }
+}
+
+// Auto-scroll toggle on click
+document.addEventListener('DOMContentLoaded', function () {
+  var viewer = document.getElementById('log-viewer');
+  viewer.addEventListener('mousedown', function () { _logPaused = true; });
+  viewer.addEventListener('mouseup',   function () { _logPaused = false; });
+});
 
 // ── models.ini editor ────────────────────────────────────────────
 var miData = null;          // last /api/models payload
