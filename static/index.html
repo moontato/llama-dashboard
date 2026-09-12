@@ -931,15 +931,21 @@ function logStart() {
     var line = evt.data;
     if (!line) return;  // heartbeat
     var viewer = document.getElementById('log-viewer');
-    viewer.textContent += line + '\n';
-    if (_logScroll && !_logPaused) {
-      viewer.scrollTop = viewer.scrollHeight;
-    }
-    // Limit buffer — keep last ~2000 lines
-    var max = 2000;
-    var lines = viewer.textContent.split('\n');
-    if (lines.length > max) {
-      viewer.textContent = lines.slice(lines.length - max).join('\n') + '\n';
+    if (line.indexOf('[error] ') === 0) {
+      viewer.textContent += line + '\n';
+      viewer.style.color = 'var(--crit)';
+      logSetStatus('error', 'error');
+    } else {
+      viewer.textContent += line + '\n';
+      if (_logScroll && !_logPaused) {
+        viewer.scrollTop = viewer.scrollHeight;
+      }
+      // Limit buffer — keep last ~2000 lines
+      var max = 2000;
+      var lines = viewer.textContent.split('\n');
+      if (lines.length > max) {
+        viewer.textContent = lines.slice(lines.length - max).join('\n') + '\n';
+      }
     }
   };
 

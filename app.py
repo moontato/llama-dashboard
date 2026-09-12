@@ -238,6 +238,14 @@ def _stop_log_stream() -> None:
             _LOG_STATE["running"] = False
 
 
+def _journalctl_cmd() -> List[str]:
+    """Return the journalctl command to stream llama-server logs."""
+    return [
+        "sudo", "journalctl", "-f", "-u", "llama-server.service",
+        "--no-pager", "--no-hostname", "-n", "500",
+    ]
+
+
 @app.route("/healthz")
 def healthz() -> Response:
     return "ok"
@@ -247,13 +255,10 @@ def healthz() -> Response:
 def logs_llama_server() -> Response:
     """SSE endpoint that streams journalctl output for llama-server.service."""
     def generate() -> Any:
-        import signal as sig  # noqa: PLC0415
-
         _stop_log_stream()
         try:
             proc = subprocess.Popen(
-                ["sudo", "journalctl", "-f", "-u", "llama-server.service",
-                 "--no-pager", "--no-hostname"],
+                _journalctl_cmd(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -263,14 +268,17 @@ def logs_llama_server() -> Response:
             yield "data: [error] " + str(exc) + "\n\n"
             return
 
+        # Check if journalctl started successfully (stderr may have auth error)
+        import time as _time  # noqa: PLC0415
+        _time.sleep(0.2)
+        if proc.poll() is not None:
+            _, stderr = proc.communicate()
+            yield "data: [error] " + stderr.strip().split("\n")[-1] + "\n\n"
+            return
+
         with _LOG_LOCK:
             _LOG_STATE["pid"] = proc.pid
             _LOG_STATE["running"] = True
-
-        # Send a heartbeat every 15s so proxies don't kill the connection
-        heartbeat = threading.Timer(15.0, lambda: (yield "data: \n\n"))
-        heartbeat.daemon = True
-        heartbeat.start()
 
         try:
             for line in proc.stdout:
@@ -282,7 +290,10 @@ def logs_llama_server() -> Response:
             pass
         finally:
             proc.terminate()
-            proc.wait(timeout=5)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
             with _LOG_LOCK:
                 _LOG_STATE["pid"] = None
                 _LOG_STATE["running"] = False
