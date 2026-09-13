@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import difflib
 import json
 import os
 import re
@@ -107,6 +108,10 @@ _restart_lock    = threading.Lock()
 
 _write_lock      = threading.Lock()   # serializes models.ini read-modify-write
 _git_lock        = threading.Lock()   # serializes git commit/pull/push
+
+# One-level undo: raw text just before the last successful write. All
+# access under _write_lock; cleared after use and on git commit/pull.
+_last_raw        = {"text": None}
 _fetch_state     = {"last_ts": 0.0}
 _FETCH_MIN_S     = 60    # min seconds between ahead/behind refreshes
 _FETCH_TIMEOUT_S = 10
@@ -607,8 +612,8 @@ def _load_doc():
     return text, parse(text)
 
 
-def _save_doc(doc) -> None:
-    text = doc.render()
+def _write_text(text: str) -> None:
+    """Atomic in-place write of an exact text (shared by save/undo)."""
     f = _ini_file()
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(f) or ".",
                                 prefix="." + os.path.basename(f) + ".")
@@ -621,6 +626,10 @@ def _save_doc(doc) -> None:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
+
+
+def _save_doc(doc) -> None:
+    _write_text(doc.render())
 
 
 def _valid_name(name: str) -> bool:
@@ -641,12 +650,18 @@ def _mutate(fn):
 
     The lock makes concurrent edits sequential: without it, two
     simultaneous requests would both parse the old file and the second
-    write would silently discard the first edit (lost update)."""
+    write would silently discard the first edit (lost update).
+    A real change records the pre-image for one-level undo; no-ops
+    don't consume the undo slot."""
     with _write_lock:
         try:
             _text, doc = _load_doc()
             fn(doc)
-            _save_doc(doc)
+            new_text = doc.render()
+            if new_text == _text:
+                return jsonify({"ok": True}), 200
+            _last_raw["text"] = _text
+            _write_text(new_text)
             return jsonify({"ok": True}), 200
         except ModelsIniError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
@@ -799,12 +814,70 @@ def api_models_raw() -> Response:
         doc = parse(text)
         if not doc.blocks:
             return jsonify({"ok": False, "error": "no sections found"}), 400
-        _save_doc(doc)
+        # Same lock + pre-image rule as _mutate: a raw save is an edit
+        # too, and must not race a concurrent section edit.
+        with _write_lock:
+            current, _ = _load_doc()
+            if doc.render() != current:
+                _last_raw["text"] = current
+            _save_doc(doc)
         return jsonify({"ok": True}), 200
     except ModelsIniError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
+    except (OSError, UnicodeDecodeError) as exc:
+        return jsonify({"ok": False, "error": f"cannot read models.ini: {exc}"}), 500
     except Exception as exc:
         return jsonify({"ok": False, "error": f"save failed: {exc}"}), 500
+
+
+@app.route("/api/models/undo", methods=["POST"])
+def api_models_undo() -> Response:
+    """Restore the pre-image of the last successful edit (one level).
+    Consumed on success; 400 when nothing is recorded."""
+    guard = _guard_write()
+    if guard:
+        return guard
+    with _write_lock:
+        preimage = _last_raw["text"]
+        if preimage is None:
+            return jsonify({"ok": False, "error": "nothing to undo"}), 400
+        _last_raw["text"] = None
+        try:
+            doc = parse(preimage)   # sanity: pre-image must still parse
+            if not doc.blocks:
+                return jsonify({"ok": False, "error": "no sections found"}), 400
+            _save_doc(doc)
+            return jsonify({"ok": True}), 200
+        except ModelsIniError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"undo failed: {exc}"}), 500
+
+
+@app.route("/api/models/raw/diff", methods=["POST"])
+def api_models_raw_diff() -> Response:
+    """Parse-check proposed raw text and return a unified diff vs the
+    live file. Read-only — no write, no lock needed."""
+    data = request.get_json(silent=True) or {}
+    proposed = data.get("text")
+    if not isinstance(proposed, str):
+        return jsonify({"ok": False, "error": "expected {text: str}"}), 400
+    try:
+        current, _ = _load_doc()
+    except (OSError, UnicodeDecodeError) as exc:
+        return jsonify({"ok": False, "error": f"cannot read models.ini: {exc}"}), 500
+    try:
+        doc = parse(proposed)
+    except ModelsIniError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    if not doc.blocks:
+        return jsonify({"ok": False, "error": "no sections found"}), 400
+    diff = list(difflib.unified_diff(
+        current.splitlines(), proposed.splitlines(),
+        fromfile="models.ini (current)", tofile="models.ini (proposed)",
+        lineterm=""))
+    return jsonify({"ok": True, "sections": len(doc.blocks),
+                    "changed": bool(diff), "diff": diff})
 
 
 @app.route("/api/models/backup", methods=["GET"])
@@ -983,14 +1056,19 @@ def api_models_git() -> Response:
                 if code != 0:
                     return jsonify({"ok": False, "error": err or "git failed"}), 500
             code, out, _ = _git("log", "-1", "--format=%h %s")
+            with _write_lock:
+                _last_raw["text"] = None    # committed: pre-image is history
             return jsonify({"ok": True, "commit": out})
     if action == "pull":
         with _git_lock:
             code, out, err = _git("pull", "--ff-only", "origin", branch,
                                   timeout=120)
             text = out or err
-            return (jsonify({"ok": True, "output": text}), 200) if code == 0 else \
-                   (jsonify({"ok": False, "error": text, "output": text}), 500)
+            if code != 0:
+                return jsonify({"ok": False, "error": text, "output": text}), 500
+            with _write_lock:
+                _last_raw["text"] = None    # upstream may have moved the file
+            return jsonify({"ok": True, "output": text}), 200
     if action == "push":
         with _git_lock:
             code, out, err = _git("push", "origin", branch, timeout=120)

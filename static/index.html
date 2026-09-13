@@ -434,6 +434,34 @@
     .mi-filterbar input { flex: 1; }
     .mi-filter-count { font-size: 0.68rem; color: var(--muted); white-space: nowrap; }
     .mi-row.mi-hidden, .mi-region-wrap.mi-all-hidden { display: none; }
+
+    /* ── Raw save: diff preview modal ──────────────── */
+    .mi-diff-modal {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+      display: none; align-items: center; justify-content: center; z-index: 50;
+    }
+    .mi-diff-modal.open { display: flex; }
+    .mi-diff-box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; max-width: min(92vw, 760px); max-height: 80vh;
+      display: flex; flex-direction: column; padding: 0.8rem 1rem;
+    }
+    .mi-diff-head {
+      display: flex; justify-content: space-between; gap: 1rem;
+      font-size: 0.8rem; margin-bottom: 0.4rem;
+    }
+    .mi-diff-meta { color: var(--muted); }
+    .mi-diff-pre {
+      margin: 0; overflow: auto; max-height: 55vh; padding: 0.5rem;
+      background: rgba(0,0,0,0.3); border-radius: 6px;
+      font-family: ui-monospace, monospace; font-size: 0.72rem; line-height: 1.35;
+    }
+    .mi-diff-pre div { white-space: pre; }
+    .mi-diff-add { color: var(--ok); background: rgba(34,197,94,0.08); }
+    .mi-diff-del { color: var(--crit); background: rgba(239,68,68,0.08); }
+    .mi-diff-actions {
+      display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.6rem;
+    }
     .mi-detail {
       display: none;
       width: 100%;
@@ -640,6 +668,8 @@
         <button class="mini-btn" onclick="miGit('pull')">pull</button>
         <button class="mini-btn" onclick="miGit('push')">push</button>
         <a class="mini-btn" href="/api/models/backup">backup</a>
+        <button id="models-undo-btn" class="mini-btn mi-writable" onclick="miUndo()"
+                style="display:none;" title="restore the file to its state before the last edit">undo last edit</button>
       </div>
     </div>
     <div id="models-git-status" class="restart-status"></div>
@@ -704,6 +734,20 @@
         <textarea id="mi-raw-text" class="mi-raw-textarea mi-writable"></textarea>
       </div>
     </details>
+
+    <div id="mi-diff-modal" class="mi-diff-modal">
+      <div class="mi-diff-box">
+        <div class="mi-diff-head">
+          <span>save these changes?</span>
+          <span id="mi-diff-meta" class="mi-diff-meta"></span>
+        </div>
+        <pre id="mi-diff-pre" class="mi-diff-pre"></pre>
+        <div class="mi-diff-actions">
+          <button id="mi-diff-apply" class="mini-btn mi-primary">apply</button>
+          <button id="mi-diff-cancel" class="mini-btn">cancel</button>
+        </div>
+      </div>
+    </div>
     </div>
   </details>
 
@@ -1560,6 +1604,9 @@ function miRender(d) {
   var raw = miEl('mi-raw-text');
   if (raw) raw.readOnly = ro;
 
+  // undo is available while the file has uncommitted edits (#9)
+  miEl('models-undo-btn').style.display = (d.git && d.git.dirty) ? '' : 'none';
+
   miApplyFilter();
 }
 
@@ -1593,6 +1640,16 @@ function miAct(action, name, isArchived) {
 
 function miCommit() {
   miGit('commit');
+}
+
+function miUndo() {
+  miOpStatus('models-git-status', 'undoing…', true);
+  miPost('/api/models/undo', {}).then(function (d) {
+    miOpStatus('models-git-status', d.ok ? 'undid last edit' : d.error, !!d.ok);
+    if (d.ok) miLoad();
+  }).catch(function () {
+    miOpStatus('models-git-status', 'network error', false);
+  });
 }
 
 function miGit(action) {
@@ -1815,6 +1872,31 @@ function miEdit(i) {
   ed.scrollIntoView({ block: 'nearest' });
 }
 
+function miEditSummary() {
+  var bits = [];
+  var name = miEl('mi-name').value.trim();
+  var nn = miEl('mi-newname').value.trim();
+  if (nn && nn !== name) bits.push('rename: ' + name + ' \u2192 ' + nn);
+  var model = miEl('mi-model').value.trim();
+  if (model && miOriginal.model !== model)
+    bits.push('model \u2192 ' + model.split('/').pop());
+  if (!model && miOriginal.model) bits.push('- model');
+  var present = {};
+  miEl('mi-params').querySelectorAll('.mi-param').forEach(function (row) {
+    var k = row.querySelector('.mi-k').value.trim();
+    var v = row.querySelector('.mi-v').value.trim();
+    if (!k) return;
+    present[k] = true;
+    if (!(k in miOriginal)) bits.push('+ ' + k + ' = ' + v);
+    else if (miOriginal[k] !== v) bits.push(k + ': ' + miOriginal[k] + ' \u2192 ' + v);
+  });
+  Object.keys(miOriginal).forEach(function (k) {
+    if (k === 'model' || present[k]) return;
+    bits.push('- ' + k);
+  });
+  return bits;
+}
+
 function miSaveEdit() {
   var name = miEl('mi-name').value.trim();
   var set = {};
@@ -1837,6 +1919,13 @@ function miSaveEdit() {
                archived: miEditArchived };
   var nn = miEl('mi-newname').value.trim();
   if (nn && nn !== name) body.new_name = nn;
+  // preview the exact change before it hits the file (#6)
+  var bits = miEditSummary();
+  if (!bits.length) {
+    miOpStatus('mi-edit-status', 'no changes', true);
+    return;
+  }
+  if (!confirm('[' + name + ']\n  ' + bits.join('\n  ') + '\n\nsave?')) return;
   miOpStatus('mi-edit-status', 'saving…', true);
   miPost('/api/models/section/edit', body).then(function (d) {
     miOpStatus('mi-edit-status', d.ok ? 'saved' : d.error, !!d.ok);
@@ -1912,19 +2001,47 @@ function miRawLoad() {
     });
 }
 
+var miDiffApplyFn = null;
+
 function miRawSave() {
   var text = miEl('mi-raw-text').value;
-  miRawStatus('saving\u2026', true);
-  miPost('/api/models/raw', { text: text }).then(function (d) {
-    if (d.ok) {
-      miRawStatus('saved', true);
-      miLoad();
-    } else {
-      miRawStatus(d.error || 'save failed', false);
-    }
+  // parse-check + preview before anything is written (#6)
+  miRawStatus('checking\u2026', true);
+  miPost('/api/models/raw/diff', { text: text }).then(function (d) {
+    if (!d.ok) { miRawStatus(d.error || 'invalid', false); return; }
+    if (!d.changed) { miRawStatus('no changes', true); return; }
+    miShowDiff(d.diff, d.sections, function () {
+      miRawStatus('saving\u2026', true);
+      miPost('/api/models/raw', { text: text }).then(function (r) {
+        if (r.ok) { miRawStatus('saved', true); miLoad(); }
+        else miRawStatus(r.error || 'save failed', false);
+      }).catch(function () {
+        miRawStatus('network error', false);
+      });
+    });
   }).catch(function () {
     miRawStatus('network error', false);
   });
+}
+
+function miShowDiff(diff, sections, onApply) {
+  var pre = miEl('mi-diff-pre');
+  pre.innerHTML = '';
+  diff.forEach(function (line) {
+    var div = document.createElement('div');
+    if (line.charAt(0) === '+') div.className = 'mi-diff-add';
+    else if (line.charAt(0) === '-') div.className = 'mi-diff-del';
+    div.textContent = line === '' ? ' ' : line;
+    pre.appendChild(div);
+  });
+  miEl('mi-diff-meta').textContent = 'parses to ' + sections + ' sections';
+  miDiffApplyFn = onApply;
+  miEl('mi-diff-modal').classList.add('open');
+}
+
+function miCloseDiff() {
+  miEl('mi-diff-modal').classList.remove('open');
+  miDiffApplyFn = null;
 }
 
 function miRawStatus(msg, ok) {
@@ -1957,6 +2074,21 @@ document.addEventListener('keydown', function (e) {
     }
   });
 })();
+
+  // diff modal (#6)
+  miEl('mi-diff-apply').onclick = function () {
+    var fn = miDiffApplyFn;
+    miCloseDiff();
+    if (fn) fn();
+  };
+  miEl('mi-diff-cancel').onclick = miCloseDiff;
+  miEl('mi-diff-modal').addEventListener('click', function (e) {
+    if (e.target === this) miCloseDiff();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && miEl('mi-diff-modal').classList.contains('open'))
+      miCloseDiff();
+  });
 
   // section filter (#1)
   miEl('mi-filter').addEventListener('input', function () {

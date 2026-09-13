@@ -4,6 +4,7 @@ import http.server
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -984,6 +985,154 @@ class ModelsFilesTestCase(unittest.TestCase):
         self.assertEqual(m["name"], "NoModel")
         self.assertIsNone(m["model_exists"])
         self.assertIsNone(m["model_size_bytes"])
+
+
+class UndoDiffTestCase(unittest.TestCase):
+    """Phase 4: one-level undo (#9) + raw diff preview (#6)."""
+
+    ENV_KEYS = ("CONFIG_FILE", "MODELS_INI_FILE", "MODELS_INI_DIR",
+                "MODELS_DIR")
+    INI = ("version = 1\n\n"
+           "[S1]\nmodel = /x/y.gguf\ntemp = 0.7\n")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="modelsini-undo-")
+        self.prev = {k: os.environ.get(k) for k in self.ENV_KEYS}
+        for k in self.ENV_KEYS:
+            os.environ.pop(k, None)
+        ini = os.path.join(self.tmp, "models.ini")
+        with open(ini, "w", encoding="utf-8") as fh:
+            fh.write(self.INI)
+        os.environ["MODELS_INI_FILE"] = ini
+        import app as app_mod
+        self.app_mod = app_mod
+        app_mod._last_raw["text"] = None
+        self.client = app_mod.app.test_client()
+
+    def tearDown(self):
+        for k, v in self.prev.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self.app_mod._last_raw["text"] = None
+        self.app_mod._FILE_CFG = self.app_mod._load_config_file()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _ini_text(self):
+        with open(self.app_mod._ini_file(), "r", encoding="utf-8") as fh:
+            return fh.read()
+
+    def _edit(self, value="0.9"):
+        r = self.client.post("/api/models/section/edit",
+                             json={"name": "S1",
+                                   "set": {"temp": value},
+                                   "remove": [],
+                                   "key_order": ["model", "temp"],
+                                   "archived": False})
+        self.assertEqual(r.status_code, 200, r.get_json())
+
+    def test_undo_restores_preimage(self):
+        self._edit()
+        self.assertNotEqual(self._ini_text(), self.INI)
+        r = self.client.post("/api/models/undo")
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual(self._ini_text(), self.INI)
+
+    def test_undo_consumed_after_use(self):
+        self._edit()
+        self.assertEqual(self.client.post("/api/models/undo").status_code,
+                         200)
+        r = self.client.post("/api/models/undo")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("nothing to undo", r.get_json()["error"])
+
+    def test_undo_nothing(self):
+        r = self.client.post("/api/models/undo")
+        self.assertEqual(r.status_code, 400)
+
+    def test_undo_noop_edit_not_consumed(self):
+        self._edit(value="0.7")          # same value: no byte change
+        self.assertIsNone(self.app_mod._last_raw["text"])
+        self.assertEqual(self._ini_text(), self.INI)
+        r = self.client.post("/api/models/undo")
+        self.assertEqual(r.status_code, 400)
+
+    def test_undo_after_raw_save(self):
+        r = self.client.post("/api/models/raw",
+                             json={"text": self.INI.replace("0.7", "0.5")})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.client.post("/api/models/undo")
+        self.assertEqual(self._ini_text(), self.INI)
+
+    def _git_repo(self, with_origin):
+        def g(repo, *args):
+            subprocess.run(["git", "-C", repo, *args], check=True,
+                           capture_output=True, text=True)
+        repo = os.path.join(self.tmp, "repo")
+        os.makedirs(repo)
+        g(repo, "init")
+        g(repo, "config", "user.email", "t@example.com")
+        g(repo, "config", "user.name", "t")
+        ini = os.path.join(repo, "models.ini")
+        with open(ini, "w", encoding="utf-8") as fh:
+            fh.write(self.INI)
+        g(repo, "add", "models.ini")
+        g(repo, "commit", "-m", "init")
+        if with_origin:
+            origin = os.path.join(self.tmp, "origin.git")
+            subprocess.run(["git", "init", "--bare", origin],
+                           check=True, capture_output=True, text=True)
+            g(repo, "remote", "add", "origin", origin)
+            g(repo, "push", "origin", "HEAD")
+        os.environ["MODELS_INI_FILE"] = ini
+
+    def test_commit_clears_undo(self):
+        self._git_repo(with_origin=False)
+        self._edit()
+        self.assertIsNotNone(self.app_mod._last_raw["text"])
+        r = self.client.post("/api/models/git",
+                             json={"action": "commit", "message": "x"})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertIsNone(self.app_mod._last_raw["text"])
+        r = self.client.post("/api/models/undo")
+        self.assertEqual(r.status_code, 400)
+
+    def test_pull_clears_undo(self):
+        self._git_repo(with_origin=True)
+        self._edit()
+        self.assertIsNotNone(self.app_mod._last_raw["text"])
+        r = self.client.post("/api/models/git",
+                             json={"action": "pull"})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertIsNone(self.app_mod._last_raw["text"])
+
+    def test_diff_no_change(self):
+        r = self.client.post("/api/models/raw/diff",
+                             json={"text": self.INI})
+        d = r.get_json()
+        self.assertEqual(r.status_code, 200, d)
+        self.assertFalse(d["changed"])
+        self.assertEqual(d["diff"], [])
+        self.assertEqual(d["sections"], 1)
+
+    def test_diff_change(self):
+        r = self.client.post("/api/models/raw/diff",
+                             json={"text": self.INI.replace("0.7", "0.9")})
+        d = r.get_json()
+        self.assertTrue(d["changed"])
+        self.assertIn("-temp = 0.7", d["diff"])
+        self.assertIn("+temp = 0.9", d["diff"])
+        self.assertEqual(d["sections"], 1)
+
+    def test_diff_no_sections(self):
+        r = self.client.post("/api/models/raw/diff", json={"text": "hello"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_diff_missing_body(self):
+        r = self.client.post("/api/models/raw/diff", json={})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("text", r.get_json()["error"])
 
 
 if __name__ == "__main__":
