@@ -521,8 +521,28 @@ def api_models() -> Response:
         "write_reason": _models_gate["reason"],
         "models": [_section_view(b) for b in doc.blocks],
         "aliases": doc.group_aliases(),
+        "raw": _text,
         "git": git,
     })
+
+
+@app.route("/api/models/raw", methods=["POST"])
+def api_models_raw() -> Response:
+    guard = _guard_write()
+    if guard:
+        return guard
+    data = request.get_json(silent=True) or {}
+    text = str(data.get("text", ""))
+    try:
+        doc = parse(text)
+        if not doc.blocks:
+            return jsonify({"ok": False, "error": "no sections found"}), 400
+        _save_doc(doc)
+        return jsonify({"ok": True}), 200
+    except ModelsIniError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"save failed: {exc}"}), 500
 
 
 @app.route("/api/models/backup", methods=["GET"])

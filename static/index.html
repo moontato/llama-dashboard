@@ -449,6 +449,19 @@
     }
     .mi-copy-row { display: flex; gap: 0.4rem; align-items: center; }
     .mi-copy-row select { flex: 1; min-width: 0; }
+    .mi-raw-textarea {
+      width: 100%;
+      min-height: 320px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font: inherit;
+      padding: 0.5rem;
+      resize: vertical;
+      white-space: pre;
+      overflow-x: auto;
+    }
     details.mi-disc { margin-bottom: 0.5rem; }
     .mi-sum {
       list-style: none; display: flex; align-items: center; justify-content: space-between;
@@ -606,6 +619,20 @@
     </details>
 
     <div id="models-op-status" class="restart-status"></div>
+
+    <hr class="adv-divider">
+
+    <details id="mi-editor-raw" class="mi-disc">
+      <summary class="mi-sum">Raw editor</summary>
+      <div class="mi-add-body">
+        <div class="adv-row" style="gap:0.5rem; margin-bottom:0.4rem;">
+          <button class="mini-btn mi-writable" onclick="miRawLoad()">load</button>
+          <button class="mini-btn mi-primary mi-writable" onclick="miRawSave()">save</button>
+          <span id="mi-raw-status" class="restart-status"></span>
+        </div>
+        <textarea id="mi-raw-text" class="mi-raw-textarea mi-writable"></textarea>
+      </div>
+    </details>
     </div>
   </details>
 
@@ -1306,6 +1333,8 @@ function miRender(d) {
     document.querySelectorAll('#models-card .mi-writable'),
     function (b) { b.disabled = ro; }
   );
+  var raw = miEl('mi-raw-text');
+  if (raw) raw.readOnly = ro;
 }
 
 function miLoad() {
@@ -1637,6 +1666,44 @@ function miAdd() {
   });
 }
 
+function miRawLoad() {
+  fetch('/api/models')
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.ok && d.raw !== undefined) {
+        miEl('mi-raw-text').value = d.raw;
+        miRawStatus('', true);
+      } else {
+        miEl('mi-raw-text').value = '';
+        miRawStatus('load failed', false);
+      }
+    })
+    .catch(function () {
+      miRawStatus('network error', false);
+    });
+}
+
+function miRawSave() {
+  var text = miEl('mi-raw-text').value;
+  miRawStatus('saving\u2026', true);
+  miPost('/api/models/raw', { text: text }).then(function (d) {
+    if (d.ok) {
+      miRawStatus('saved', true);
+      miLoad();
+    } else {
+      miRawStatus(d.error || 'save failed', false);
+    }
+  }).catch(function () {
+    miRawStatus('network error', false);
+  });
+}
+
+function miRawStatus(msg, ok) {
+  var el = miEl('mi-raw-status');
+  el.textContent = msg;
+  el.className = 'restart-status ' + (ok ? 'ok' : 'err');
+}
+
 function miUnpinAliases() {
   var trs = document.querySelectorAll('.mi-alias-info');
   for (var k = 0; k < trs.length; k++)
@@ -1650,6 +1717,17 @@ document.addEventListener('click', function (e) {
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape') miUnpinAliases();
 });
+
+// Auto-load raw editor content whenever opened
+(function () {
+  var rawEditor = miEl('mi-editor-raw');
+  if (!rawEditor) return;
+  rawEditor.addEventListener('toggle', function () {
+    if (rawEditor.open) {
+      miRawLoad();
+    }
+  });
+})();
 
 miLoad();</script>
 </body>
