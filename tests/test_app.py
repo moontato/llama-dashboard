@@ -738,19 +738,21 @@ class ProbesTestCase(unittest.TestCase):
         self._patch("_systemctl_active_mono_us",
                     lambda unit: int((time.monotonic() - 3700) * 1_000_000))
         os.environ["LLAMA_SERVER_PORT"] = "11435"
-        self._patch("_llama_model_name",
-                    lambda host, port: "test-model.gguf")
+        self._patch("_llama_model_info",
+                    lambda host, port: {"name": "test-model.gguf",
+                                         "status": "loaded"})
         out = self.app_mod._probe_llama_server()
         self.assertEqual(out["state"], "active")
         self.assertTrue(3690 <= out["uptime_s"] <= 3710)
         self.assertEqual(out["model"], "test-model.gguf")
+        self.assertEqual(out["model_status"], "loaded")
         self.assertTrue(out["model_configured"])
 
     def test_probe_inactive_skips_http(self):
         self._patch("_systemctl_is_active", lambda unit: "inactive")
         def boom(host, port):
             raise AssertionError("HTTP probe must be skipped when inactive")
-        self._patch("_llama_model_name", boom)
+        self._patch("_llama_model_info", boom)
         os.environ["LLAMA_SERVER_PORT"] = "11435"
         out = self.app_mod._probe_llama_server()
         self.assertEqual(out["state"], "inactive")
@@ -767,7 +769,7 @@ class ProbesTestCase(unittest.TestCase):
         self._patch("_systemctl_active_mono_us", lambda unit: None)
         def boom(host, port):
             raise AssertionError("HTTP probe must be skipped without a port")
-        self._patch("_llama_model_name", boom)
+        self._patch("_llama_model_info", boom)
         out = self.app_mod._probe_llama_server()
         self.assertFalse(out["model_configured"])
         self.assertIsNone(out["model"])
@@ -792,30 +794,46 @@ class ProbesTestCase(unittest.TestCase):
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         return srv, srv.server_address[1]
 
-    def test_model_name_from_v1_models(self):
-        body = json.dumps({"data": [{"id": "test-model.gguf"}]}).encode()
+    def test_model_info_from_v1_models(self):
+        body = json.dumps({"data": [{"id": "test-model.gguf",
+                                     "status": {"value": "loaded",
+                                                "args": []}}]}).encode()
         srv, port = self._serve({"/v1/models": (200, body)})
         try:
-            self.assertEqual(
-                self.app_mod._llama_model_name("127.0.0.1", port),
-                "test-model.gguf")
+            info = self.app_mod._llama_model_info("127.0.0.1", port)
+            self.assertEqual(info, {"name": "test-model.gguf",
+                                    "status": "loaded"})
         finally:
             srv.shutdown()
             srv.server_close()
 
-    def test_model_name_falls_back_to_props(self):
+    def test_model_info_unloaded_status(self):
+        # the Orin's models-preset build: preset name + status "unloaded"
+        body = json.dumps({"data": [{"id": "Code-medium",
+                                     "status": {"value": "unloaded",
+                                                "args": []}}]}).encode()
+        srv, port = self._serve({"/v1/models": (200, body)})
+        try:
+            info = self.app_mod._llama_model_info("127.0.0.1", port)
+            self.assertEqual(info, {"name": "Code-medium",
+                                    "status": "unloaded"})
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_model_info_falls_back_to_props(self):
         body = json.dumps({"name": "fallback.gguf"}).encode()
         srv, port = self._serve({"/props": (200, body)})
         try:
             self.assertEqual(
-                self.app_mod._llama_model_name("127.0.0.1", port),
-                "fallback.gguf")
+                self.app_mod._llama_model_info("127.0.0.1", port),
+                {"name": "fallback.gguf", "status": None})
         finally:
             srv.shutdown()
             srv.server_close()
 
-    def test_model_name_unreachable(self):
-        self.assertIsNone(self.app_mod._llama_model_name("127.0.0.1", 1))
+    def test_model_info_unreachable(self):
+        self.assertIsNone(self.app_mod._llama_model_info("127.0.0.1", 1))
 
     # ── disk probe ───────────────────────────────────────────
     def test_probe_disk(self):

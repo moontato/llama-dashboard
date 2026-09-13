@@ -352,25 +352,39 @@ def _systemctl_active_mono_us(unit: str) -> Optional[int]:
         return None
 
 
-def _llama_model_name(host: str, port: int) -> Optional[str]:
-    """Loaded model name via the server's HTTP API — OpenAI-compat
-    /v1/models first, /props as fallback. None when unreachable (still
-    starting up, wrong port, …)."""
+def _llama_model_info(host: str, port: int) -> Optional[Dict[str, Any]]:
+    """Model name + slot status via the server's HTTP API.
+
+    /v1/models first — models-preset builds report the slot state in
+    ``status.value`` ("loaded" / "unloaded" / "loading") — /props as a
+    plain fallback (status unknown). None when unreachable (still
+    starting up, wrong port, …).
+    """
     import urllib.request  # noqa: PLC0415
-    for path, extract in (
-        ("/v1/models",
-         lambda d: (d.get("data") or [{}])[0].get("id") if isinstance(d, dict) else None),
-        ("/props", lambda d: d.get("name") if isinstance(d, dict) else None),
-    ):
-        try:
-            with urllib.request.urlopen(
-                    f"http://{host}:{port}{path}", timeout=1.5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            name = extract(data)
+    try:
+        with urllib.request.urlopen(
+                f"http://{host}:{port}/v1/models", timeout=1.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        items = data.get("data") if isinstance(data, dict) else None
+        if items:
+            item = items[0] or {}
+            name = item.get("id") or item.get("name")
             if name:
-                return str(name)
-        except Exception:
-            continue
+                status = item.get("status")
+                status = status.get("value") if isinstance(status, dict) else status
+                return {"name": str(name),
+                        "status": str(status) if status is not None else None}
+    except Exception:
+        pass
+    try:
+        with urllib.request.urlopen(
+                f"http://{host}:{port}/props", timeout=1.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        name = data.get("name") if isinstance(data, dict) else None
+        if name:
+            return {"name": str(name), "status": None}
+    except Exception:
+        pass
     return None
 
 
@@ -388,8 +402,10 @@ def _probe_llama_server() -> Dict[str, Any]:
     port = _cfg_int("llama_server_port", 0)
     if port:
         out["model_configured"] = True
-        out["model"] = _llama_model_name(
-            str(_cfg("llama_server_host", "127.0.0.1")), port)
+        info = _llama_model_info(str(_cfg("llama_server_host", "127.0.0.1")), port)
+        if info:
+            out["model"] = info["name"]
+            out["model_status"] = info["status"]
     return out
 
 
