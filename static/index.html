@@ -352,6 +352,23 @@
       scrollbar-width: thin;
       scrollbar-color: var(--border) transparent;
     }
+    .log-line { white-space: pre-wrap; word-break: break-all; }
+    .log-err  { color: var(--crit); }
+    .log-warn { color: var(--warn); }
+    .log-mark { background: rgba(245,158,11,0.3); color: inherit; border-radius: 2px; }
+    .log-mark.log-cur { background: var(--warn); color: #14141a; }
+    .log-select {
+      font-family: inherit; font-size: 0.65rem; padding: 0.15rem 0.25rem;
+      background: #0a0a0f; color: var(--muted);
+      border: 1px solid var(--border); border-radius: 4px;
+    }
+    .log-search { display: flex; gap: 0.3rem; align-items: center; margin-top: 0.3rem; }
+    .log-search-input {
+      flex: 1; min-width: 0;
+      background: #0a0a0f; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text); font-size: 0.7rem; padding: 0.15rem 0.45rem;
+    }
+    .log-search-count { font-size: 0.62rem; color: var(--muted); white-space: nowrap; }
     #log-viewer::-webkit-scrollbar { width: 6px; }
     #log-viewer::-webkit-scrollbar-track { background: transparent; }
     #log-viewer::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -519,19 +536,51 @@
     }
     .mi-copy-row { display: flex; gap: 0.4rem; align-items: center; }
     .mi-copy-row select { flex: 1; min-width: 0; }
+    .mi-raw-wrap { display: flex; width: 100%; align-items: stretch; }
+    .mi-raw-gutter {
+      flex: none; width: 2.6rem; overflow: hidden;
+      background: #0d0d12; border: 1px solid var(--border); border-right: none;
+      border-radius: 6px 0 0 6px;
+      font-family: ui-monospace, 'SF Mono', 'Fira Code', Consolas, monospace;
+      font-size: 0.78rem; line-height: 1.5;
+      padding: 0.5rem 0.4rem 0.5rem 0;
+      color: var(--muted); text-align: right; user-select: none;
+    }
+    .mi-raw-stack {
+      position: relative; flex: 1; min-width: 0;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 0 6px 6px 0;
+    }
+    .mi-raw-hl {
+      position: absolute; inset: 0; margin: 0; overflow: hidden;
+      pointer-events: none;
+      font-family: ui-monospace, 'SF Mono', 'Fira Code', Consolas, monospace;
+      font-size: 0.78rem; line-height: 1.5;
+      padding: 0.5rem;
+      white-space: pre; word-wrap: normal;
+      color: var(--text);
+    }
+    .mi-raw-hl .mi-hl-sec { color: var(--cpu); font-weight: 600; }
+    .mi-raw-hl .mi-hl-key { color: var(--gpu); }
+    .mi-raw-hl .mi-hl-eq,
+    .mi-raw-hl .mi-hl-com,
+    .mi-raw-hl .mi-hl-marker { color: var(--muted); }
     .mi-raw-textarea {
+      position: relative; z-index: 2;
       width: 100%;
       min-height: 320px;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text);
-      font: inherit;
+      background: transparent;
+      border: none; border-radius: 0;
+      color: transparent; caret-color: var(--text);
+      font-family: ui-monospace, 'SF Mono', 'Fira Code', Consolas, monospace;
+      font-size: 0.78rem; line-height: 1.5;
       padding: 0.5rem;
       resize: vertical;
       white-space: pre;
-      overflow-x: auto;
+      overflow: auto;
+      tab-size: 4;
     }
+    .mi-raw-textarea::selection { background: rgba(99,102,241,0.35); color: transparent; }
     details.mi-disc { margin-bottom: 0.5rem; }
     .mi-sum {
       list-style: none; display: flex; align-items: center; justify-content: space-between;
@@ -731,7 +780,14 @@
           <button class="mini-btn mi-primary mi-writable" onclick="miRawSave()">save</button>
           <span id="mi-raw-status" class="restart-status"></span>
         </div>
-        <textarea id="mi-raw-text" class="mi-raw-textarea mi-writable"></textarea>
+        <div class="mi-raw-wrap">
+          <div id="mi-raw-gutter" class="mi-raw-gutter" aria-hidden="true"></div>
+          <div class="mi-raw-stack">
+            <pre id="mi-raw-hl" class="mi-raw-hl" aria-hidden="true"></pre>
+            <textarea id="mi-raw-text" class="mi-raw-textarea mi-writable"
+                      spellcheck="false" autocomplete="off"></textarea>
+          </div>
+        </div>
       </div>
     </details>
 
@@ -780,6 +836,23 @@
         <div class="log-actions" style="margin-top:0.3rem;">
           <button class="log-btn" onclick="logStop()" id="log-stop-btn" disabled>Stop</button>
           <button class="log-btn danger" onclick="logClear()" id="log-clear-btn" disabled>Clear</button>
+          <button class="log-btn" onclick="logPauseToggle()" id="log-pause-btn" disabled
+                  title="sticky pause — freezes auto-scroll until resumed">Pause</button>
+          <select id="log-tail" class="log-select" onchange="logTailChange()"
+                  title="initial tail length" disabled>
+            <option value="100">100 lines</option>
+            <option value="500" selected>500 lines</option>
+            <option value="2000">2000 lines</option>
+          </select>
+        </div>
+        <div class="log-search">
+          <input id="log-search" class="log-search-input" type="search"
+                 placeholder="search buffer — Enter next, Shift+Enter prev" disabled>
+          <button class="log-btn" id="log-search-prev" onclick="logSearchStep(-1)"
+                  title="previous match" disabled>&#9650;</button>
+          <button class="log-btn" id="log-search-next" onclick="logSearchStep(1)"
+                  title="next match" disabled>&#9660;</button>
+          <span id="log-search-count" class="log-search-count"></span>
         </div>
         <div id="log-viewer"></div>
       </div>
@@ -1104,10 +1177,15 @@ function _advBtn(btnId, statusId, url, cooldownMs) {
 function restartLlama()  { _advBtn('restart-btn',  'restart-status',  '/api/restart-llama',    30000); }
 
 // ── llama-server log viewer ─────────────────────────────────
-var _logEs     = null;
-var _logOpen   = false;
-var _logPaused = false;
-var _logScroll = true;
+var _logEs        = null;
+var _logOpen      = false;
+var _logPaused    = false;  // sticky pause (Pause/Resume button)
+var _logMouseHold = false;  // transient hold while the mouse is down
+var _logPinned    = true;   // stick to the bottom until the user scrolls up
+var _logMatches   = [];     // <mark> elements for the current search
+var _logMatchIdx  = -1;
+
+function logIsPaused() { return _logPaused || _logMouseHold; }
 
 function logToggle() {
   var btn = document.getElementById('log-toggle-btn');
@@ -1127,33 +1205,26 @@ function logToggle() {
 function logStart() {
   if (_logEs) return;
   logSetStatus('connecting', 'stopped');
-  _logEs = new EventSource('/api/logs/llama-server');
+  _logEs = new EventSource('/api/logs/llama-server?tail='
+                           + document.getElementById('log-tail').value);
 
   _logEs.onopen = function () {
     logSetStatus('streaming', 'connected');
     document.getElementById('log-stop-btn').disabled = false;
     document.getElementById('log-clear-btn').disabled = false;
+    document.getElementById('log-pause-btn').disabled = false;
+    document.getElementById('log-tail').disabled = false;
+    logSearchEnable(true);
   };
 
   _logEs.onmessage = function (evt) {
     var line = evt.data;
     if (!line) return;  // heartbeat
-    var viewer = document.getElementById('log-viewer');
     if (line.indexOf('[error] ') === 0) {
-      viewer.textContent += line + '\n';
-      viewer.style.color = 'var(--crit)';
+      logAppendLine(line, 'log-err');
       logSetStatus('error', 'error');
     } else {
-      viewer.textContent += line + '\n';
-      if (_logScroll && !_logPaused) {
-        viewer.scrollTop = viewer.scrollHeight;
-      }
-      // Limit buffer — keep last ~2000 lines
-      var max = 2000;
-      var lines = viewer.textContent.split('\n');
-      if (lines.length > max) {
-        viewer.textContent = lines.slice(lines.length - max).join('\n') + '\n';
-      }
+      logAppendLine(line, null);
     }
   };
 
@@ -1163,7 +1234,98 @@ function logStart() {
     _logEs = null;
     document.getElementById('log-stop-btn').disabled = true;
     document.getElementById('log-clear-btn').disabled = true;
+    document.getElementById('log-pause-btn').disabled = true;
+    document.getElementById('log-tail').disabled = true;
+    logSearchEnable(false);
   };
+}
+
+function logAppendLine(line, forcedClass) {
+  var viewer = document.getElementById('log-viewer');
+  var cls = forcedClass
+      || (/(^|\s)(ERROR|CRIT|FATAL)([:\s]|$)/i.test(line) ? 'log-err'
+      : /(\s|^)WARN(ING)?[:\s]/i.test(line) ? 'log-warn' : '');
+  var div = document.createElement('div');
+  div.className = 'log-line' + (cls ? ' ' + cls : '');
+  div.textContent = line;
+  div._raw = line;
+  viewer.appendChild(div);
+  while (viewer.childElementCount > 2000) viewer.removeChild(viewer.firstChild);
+  if (document.getElementById('log-search').value.trim()) logApplySearch();
+  if (_logPinned && !logIsPaused()) viewer.scrollTop = viewer.scrollHeight;
+}
+
+function logSearchEnable(on) {
+  var inp = document.getElementById('log-search');
+  inp.disabled = !on;
+  document.getElementById('log-search-prev').disabled = !on;
+  document.getElementById('log-search-next').disabled = !on;
+  if (!on) {
+    inp.value = '';
+    document.getElementById('log-search-count').textContent = '';
+  }
+}
+
+function logApplySearch() {
+  var q = document.getElementById('log-search').value.trim();
+  var viewer = document.getElementById('log-viewer');
+  _logMatches = [];
+  _logMatchIdx = -1;
+  var count = 0;
+  viewer.querySelectorAll('.log-line').forEach(function (el) {
+    var raw = el._raw || '';
+    if (!q) { el.textContent = raw; return; }
+    var lower = raw.toLowerCase();
+    var ql = q.toLowerCase();
+    var html = '';
+    var pos = 0;
+    var idx;
+    while ((idx = lower.indexOf(ql, pos)) !== -1) {
+      html += miEsc(raw.slice(pos, idx))
+           + '<mark class="log-mark">' + miEsc(raw.slice(idx, idx + q.length)) + '</mark>';
+      pos = idx + q.length;
+      count++;
+    }
+    html += miEsc(raw.slice(pos));
+    el.innerHTML = html;
+    el.querySelectorAll('.log-mark').forEach(function (m) { _logMatches.push(m); });
+  });
+  document.getElementById('log-search-count').textContent =
+      q ? (count ? count + ' match' + (count === 1 ? '' : 'es') : 'no matches') : '';
+  logMatchStyle();
+}
+
+function logMatchStyle() {
+  _logMatches.forEach(function (m, i) {
+    m.classList.toggle('log-cur', i === _logMatchIdx);
+  });
+}
+
+function logSearchStep(dir) {
+  if (!_logMatches.length) return;
+  _logMatchIdx = (_logMatchIdx + dir + _logMatches.length) % _logMatches.length;
+  logMatchStyle();
+  var cur = _logMatches[_logMatchIdx];
+  if (cur) {
+    _logPinned = false;
+    cur.scrollIntoView({ block: 'center' });
+  }
+}
+
+function logPauseToggle() {
+  _logPaused = !_logPaused;
+  var btn = document.getElementById('log-pause-btn');
+  btn.textContent = _logPaused ? 'Resume' : 'Pause';
+  btn.classList.toggle('active', _logPaused);
+  if (!_logPaused) {
+    var viewer = document.getElementById('log-viewer');
+    viewer.scrollTop = viewer.scrollHeight;
+  }
+}
+
+function logTailChange() {
+  if (_logEs) logStop();
+  if (_logOpen) logStart();
 }
 
 function logStop() {
@@ -1171,13 +1333,26 @@ function logStop() {
     _logEs.close();
     _logEs = null;
   }
+  _logPaused = false;
+  _logMouseHold = false;
+  _logPinned = true;
+  var pbtn = document.getElementById('log-pause-btn');
+  pbtn.textContent = 'Pause';
+  pbtn.classList.remove('active');
   logSetStatus('stopped', 'stopped');
   document.getElementById('log-stop-btn').disabled = true;
   document.getElementById('log-clear-btn').disabled = true;
+  document.getElementById('log-pause-btn').disabled = true;
+  document.getElementById('log-tail').disabled = true;
+  logSearchEnable(false);
 }
 
 function logClear() {
-  document.getElementById('log-viewer').textContent = '';
+  var viewer = document.getElementById('log-viewer');
+  viewer.innerHTML = '';
+  _logMatches = [];
+  _logMatchIdx = -1;
+  document.getElementById('log-search-count').textContent = '';
 }
 
 function logSetStatus(state, text) {
@@ -1193,12 +1368,90 @@ function logSetStatus(state, text) {
   }
 }
 
-// Auto-scroll toggle on click
 document.addEventListener('DOMContentLoaded', function () {
   var viewer = document.getElementById('log-viewer');
-  viewer.addEventListener('mousedown', function () { _logPaused = true; });
-  viewer.addEventListener('mouseup',   function () { _logPaused = false; });
+  // mouse-down hold (transient) + sticky Pause button; unpin when scrolling up
+  viewer.addEventListener('mousedown', function () { _logMouseHold = true; });
+  window.addEventListener('mouseup', function () { _logMouseHold = false; });
+  viewer.addEventListener('scroll', function () {
+    _logPinned = viewer.scrollTop + viewer.clientHeight
+               >= viewer.scrollHeight - 8;
+  });
+  var s = document.getElementById('log-search');
+  s.addEventListener('input', logApplySearch);
+  s.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      logSearchStep(e.shiftKey ? -1 : 1);
+    } else if (e.key === 'Escape') {
+      s.value = '';
+      logApplySearch();
+    }
+  });
+
+  // raw editor: highlight overlay + gutter + debounced parse check (#7)
+  var raw = document.getElementById('mi-raw-text');
+  raw.addEventListener('input', function () {
+    miRawSync();
+    miRawLiveCheck();
+  });
+  raw.addEventListener('scroll', function () {
+    document.getElementById('mi-raw-hl').scrollTop = raw.scrollTop;
+    document.getElementById('mi-raw-hl').scrollLeft = raw.scrollLeft;
+    document.getElementById('mi-raw-gutter').scrollTop = raw.scrollTop;
+  });
 });
+
+// ── raw editor helpers (single-file: no build, no CDN) ─────
+function miEsc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function miRawHighlight(text) {
+  var out = [];
+  text.split('\n').forEach(function (line) {
+    if (/^\s*(#|;)/.test(line)) {
+      var cls = /^\s*# ==/.test(line) ? 'mi-hl-marker' : 'mi-hl-com';
+      out.push('<span class="' + cls + '">' + miEsc(line) + '</span>');
+    } else if (/^\[[^\]]*\]\s*$/.test(line)) {
+      out.push('<span class="mi-hl-sec">' + miEsc(line) + '</span>');
+    } else {
+      var m = line.match(/^(\s*)([^=\s][^=]*?)(\s*=\s*)(.*)$/);
+      if (m) {
+        out.push(miEsc(m[1])
+               + '<span class="mi-hl-key">' + miEsc(m[2]) + '</span>'
+               + '<span class="mi-hl-eq">' + miEsc(m[3]) + '</span>'
+               + miEsc(m[4]));
+      } else {
+        out.push(miEsc(line));
+      }
+    }
+  });
+  return out.join('\n') + '\n';  // trailing newline: keep last line's height
+}
+
+function miRawSync() {
+  var text = miEl('mi-raw-text').value;
+  miEl('mi-raw-hl').innerHTML = miRawHighlight(text);
+  var g = miEl('mi-raw-gutter');
+  var n = text.split('\n').length;
+  var rows = [];
+  for (var i = 1; i <= n; i++) rows.push('<div>' + i + '</div>');
+  g.innerHTML = rows.join('');
+}
+
+var miRawCheckTimer = null;
+function miRawLiveCheck() {
+  clearTimeout(miRawCheckTimer);
+  miRawCheckTimer = setTimeout(function () {
+    var text = miEl('mi-raw-text').value;
+    if (!text.trim()) { miRawStatus('empty', true); return; }
+    miPost('/api/models/raw/check', { text: text }).then(function (d) {
+      if (d.ok) miRawStatus('\u2713 ' + d.sections + ' sections', true);
+      else miRawStatus(d.error, false);
+    }).catch(function () { /* network: keep last status */ });
+  }, 500);
+}
 
 // ── models.ini editor ────────────────────────────────────────────
 var miData = null;          // last /api/models payload
@@ -1990,9 +2243,11 @@ function miRawLoad() {
     .then(function (d) {
       if (d.ok && d.raw !== undefined) {
         miEl('mi-raw-text').value = d.raw;
-        miRawStatus('', true);
+        miRawSync();
+        miRawLiveCheck();
       } else {
         miEl('mi-raw-text').value = '';
+        miRawSync();
         miRawStatus('load failed', false);
       }
     })

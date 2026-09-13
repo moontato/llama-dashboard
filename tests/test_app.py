@@ -653,6 +653,14 @@ class ConfigTestCase(unittest.TestCase):
         self.assertIn("my-llama.service", cmd)
         self.assertEqual(cmd[cmd.index("-n") + 1], "77")
 
+    def test_journalctl_cmd_tail_override(self):
+        cmd = self.app_mod._journalctl_cmd(123)
+        self.assertEqual(cmd[cmd.index("-n") + 1], "123")
+        # None falls back to the configured default
+        self.assertEqual(self.app_mod._journalctl_cmd(None)
+                         [self.app_mod._journalctl_cmd(None).index("-n") + 1],
+                         "500")
+
     def test_restart_cooldown_from_config(self):
         os.environ["RESTART_COOLDOWN_S"] = "60"
         self.app_mod._restart_state["last_ts"] = time.time()
@@ -1131,6 +1139,23 @@ class UndoDiffTestCase(unittest.TestCase):
 
     def test_diff_missing_body(self):
         r = self.client.post("/api/models/raw/diff", json={})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("text", r.get_json()["error"])
+
+    def test_raw_check_ok(self):
+        r = self.client.post("/api/models/raw/check",
+                             json={"text": self.INI})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertTrue(r.get_json()["ok"])
+        self.assertEqual(r.get_json()["sections"], 1)
+
+    def test_raw_check_no_sections(self):
+        r = self.client.post("/api/models/raw/check", json={"text": "hello"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("no sections", r.get_json()["error"])
+
+    def test_raw_check_missing_body(self):
+        r = self.client.post("/api/models/raw/check", json={})
         self.assertEqual(r.status_code, 400)
         self.assertIn("text", r.get_json()["error"])
 

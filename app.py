@@ -318,13 +318,19 @@ def _stop_log_stream() -> None:
             _LOG_STATE["running"] = False
 
 
-def _journalctl_cmd() -> List[str]:
-    """Return the journalctl command to stream the llama-server logs."""
+def _journalctl_cmd(nlines: Optional[int] = None) -> List[str]:
+    """Return the journalctl command to stream the llama-server logs.
+
+    ``nlines`` (the initial tail) defaults to the configured
+    ``log_tail_lines``; the log viewer can override it via ``?tail=N``.
+    """
+    if nlines is None:
+        nlines = _cfg_int("log_tail_lines", 500)
     return [
         "sudo", "journalctl", "-f", "-u",
         str(_cfg("llama_server_service", "llama-server.service")),
         "--no-pager", "--no-hostname",
-        "-n", str(_cfg_int("log_tail_lines", 500)),
+        "-n", str(nlines),
     ]
 
 
@@ -454,12 +460,20 @@ def healthz() -> Response:
 
 @app.route("/api/logs/llama-server")
 def logs_llama_server() -> Response:
-    """SSE endpoint that streams journalctl output for llama-server.service."""
+    """SSE endpoint that streams journalctl output for llama-server.service.
+
+    Optional ``?tail=N`` overrides the initial tail length (clamped to
+    10..10000); the log viewer's tail select uses it (#14).
+    """
+    tail = request.args.get("tail", type=int)
+    if tail is not None:
+        tail = max(10, min(tail, 10000))
+
     def generate() -> Any:
         _stop_log_stream()
         try:
             proc = subprocess.Popen(
-                _journalctl_cmd(),
+                _journalctl_cmd(tail),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -854,6 +868,30 @@ def api_models_undo() -> Response:
             return jsonify({"ok": False, "error": f"undo failed: {exc}"}), 500
 
 
+def _parse_proposed(text: str) -> Tuple[Optional["Document"], Optional[str]]:
+    """Parse proposed raw text without writing. → (doc, None) | (None, err)."""
+    try:
+        doc = parse(text)
+    except ModelsIniError as exc:
+        return None, str(exc)
+    if not doc.blocks:
+        return None, "no sections found"
+    return doc, None
+
+
+@app.route("/api/models/raw/check", methods=["POST"])
+def api_models_raw_check() -> Response:
+    """Parse-only validation of raw text (no write, no lock needed)."""
+    data = request.get_json(silent=True) or {}
+    text = data.get("text")
+    if not isinstance(text, str):
+        return jsonify({"ok": False, "error": "expected {text: str}"}), 400
+    doc, err = _parse_proposed(text)
+    if err is not None:
+        return jsonify({"ok": False, "error": err}), 400
+    return jsonify({"ok": True, "sections": len(doc.blocks)})
+
+
 @app.route("/api/models/raw/diff", methods=["POST"])
 def api_models_raw_diff() -> Response:
     """Parse-check proposed raw text and return a unified diff vs the
@@ -866,12 +904,9 @@ def api_models_raw_diff() -> Response:
         current, _ = _load_doc()
     except (OSError, UnicodeDecodeError) as exc:
         return jsonify({"ok": False, "error": f"cannot read models.ini: {exc}"}), 500
-    try:
-        doc = parse(proposed)
-    except ModelsIniError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
-    if not doc.blocks:
-        return jsonify({"ok": False, "error": "no sections found"}), 400
+    doc, err = _parse_proposed(proposed)
+    if err is not None:
+        return jsonify({"ok": False, "error": err}), 400
     diff = list(difflib.unified_diff(
         current.splitlines(), proposed.splitlines(),
         fromfile="models.ini (current)", tofile="models.ini (proposed)",
