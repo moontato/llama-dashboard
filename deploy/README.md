@@ -191,9 +191,11 @@ be set via an `Environment=` drop-in (`sudo systemctl edit llama-dashboard`).
 | `restart_cooldown_s` | `RESTART_COOLDOWN_S` | `30` | minimum seconds between llama-server restarts |
 | `models_ini_path` | `MODELS_INI_PATH` | `/mnt/ssd/llamacpp_models/models_ini` | the ini file, or the directory containing it. (`MODELS_INI_FILE` / `MODELS_INI_DIR` still take precedence — used by the test suite) |
 | `models_dir` | `MODELS_DIR` | parent of the ini path | root of the model files (`*.gguf`, mmproj, MTP) |
-| `llama_server_service` | `LLAMA_SERVER_SERVICE` | `llama-server.service` | unit the Restart button and log tail target — update the sudoers rule in step 3 if you rename it |
-| `llama_server_port` | `LLAMA_SERVER_PORT` | *(empty = off)* | llama-server HTTP port, for the loaded-model display (used by a later feature; empty disables the probe) |
+| `llama_server_service` | `LLAMA_SERVER_SERVICE` | `llama-server.service` | unit the status card, Restart button and log tail target — update the sudoers rule in step 3 if you rename it |
+| `llama_server_host` | `LLAMA_SERVER_HOST` | `127.0.0.1` | llama-server address for the loaded-model probe (use the tailnet IP, e.g. `100.100.10.3`, when the server isn't bound to loopback) |
+| `llama_server_port` | `LLAMA_SERVER_PORT` | *(empty = off)* | llama-server HTTP port; the status card queries `/v1/models` (fallback `/props`) here for the loaded model — e.g. `11435`. Empty disables the model probe |
 | `log_tail_lines` | `LOG_TAIL_LINES` | `500` | lines the log viewer fetches when opened |
+| `probe_interval_s` | `PROBE_INTERVAL_S` | `15` | how often the llama-server status and disk-usage probes run |
 
 ---
 
@@ -206,6 +208,6 @@ sudo systemctl disable --now llama-dashboard
 
 ## Switching to direct-bind (no Serve)
 
-Set `BIND_HOST` in `app.py` to the Tailscale IP (e.g. `100.x.y.z`), stop
+Set `BIND_HOST` (config.json or drop-in) to the Tailscale IP (e.g. `100.x.y.z`), stop
 `serve`, and add `After=tailscaled.service` + `Wants=tailscaled.service`
 to the unit.

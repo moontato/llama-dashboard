@@ -219,6 +219,35 @@
     }
 
     /* ── Footer ───────────────────────────────────────────── */
+    /* ── llama-server card ─────────────────────────────── */
+    .llm-dot {
+      display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+      margin-right: 0.45rem; background: var(--muted);
+    }
+    .llm-dot.active   { background: var(--ok); }
+    .llm-dot.inactive { background: var(--crit); }
+    .llm-dot.failed   { background: var(--crit); }
+    .llm-dot.unknown  { background: var(--muted); }
+    #llm-state { margin-left: auto; text-transform: none; letter-spacing: 0; }
+    .llm-model {
+      font-size: 0.8rem; font-weight: 600; margin-top: 0.2rem;
+      overflow-wrap: anywhere;
+    }
+    .llm-model.loading { color: var(--muted); font-weight: 400; font-style: italic; }
+    .llm-meta {
+      font-size: 0.68rem; color: var(--muted); margin-top: 0.15rem;
+    }
+
+    /* ── Disk card ──────────────────────────────────────── */
+    .disk-card .bar-fill { background: var(--cpu); }
+    .disk-card.dsk-warn .bar-fill { background: var(--warn); }
+    .disk-card.dsk-crit .bar-fill { background: var(--crit); }
+    .disk-detail {
+      display: flex; justify-content: space-between;
+      font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem;
+    }
+    .disk-detail b { color: var(--text); }
+
     .footer {
       font-size: 0.65rem;
       color: var(--muted);
@@ -552,6 +581,29 @@
     <div id="cpu-strip"></div>
   </div>
 
+  <!-- llama-server status -->
+  <div class="card" id="llm-card" style="display:none">
+    <div class="card-label">
+      <span class="llm-dot unknown" id="llm-dot"></span>
+      llama-server
+      <span id="llm-state">&mdash;</span>
+    </div>
+    <div class="llm-model" id="llm-model" style="display:none"></div>
+    <div class="llm-meta" id="llm-meta"></div>
+  </div>
+
+  <!-- Model disk usage -->
+  <div class="card disk-card" id="disk-card" style="display:none">
+    <div class="card-label" id="disk-label">Disk</div>
+    <div class="bar-track">
+      <div class="bar-fill" id="disk-bar" style="width:0%"></div>
+    </div>
+    <div class="disk-detail">
+      <span id="disk-detail">&mdash; / &mdash; GiB</span>
+      <b id="disk-pct">&mdash;%</b>
+    </div>
+  </div>
+
   <!-- Models (models.ini editor) -->
   <div id="models-readonly" class="banner"><span id="models-readonly-why"></span></div>
   <details class="card advanced-card" id="models-card">
@@ -858,9 +910,63 @@
       gpuSpark.draw(d.history.gpu_pct);
     }
 
+    // llama-server status + model disk (slow probes, ~15 s)
+    if (d.llama) updateLlm(d.llama);
+    if (d.disk)  updateDisk(d.disk);
+
     // Timestamp
     var dt = new Date(d.ts * 1000);
     setText('footer-ts', 'Last update: ' + dt.toLocaleTimeString());
+  }
+
+  // ── llama-server card ────────────────────────────────────
+  function fmtUptime(s) {
+    s = Math.max(0, s | 0);
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
+    m %= 60; h %= 24;
+    if (d) return d + 'd ' + h + 'h';
+    if (h) return h + 'h ' + m + 'm';
+    return m + 'm';
+  }
+
+  function updateLlm(l) {
+    document.getElementById('llm-card').style.display = '';
+    var state = l.state || 'unknown';
+    var dot = document.getElementById('llm-dot');
+    dot.className = 'llm-dot ' +
+      (state === 'active' ? 'active' : state === 'unknown' ? 'unknown' : 'inactive');
+    var st = document.getElementById('llm-state');
+    st.textContent = state;
+    st.style.color = state === 'active' ? 'var(--ok)' :
+                      state === 'unknown' ? 'var(--muted)' : 'var(--crit)';
+    var meta = [];
+    if (l.uptime_s != null) meta.push('up ' + fmtUptime(l.uptime_s));
+    document.getElementById('llm-meta').textContent = meta.join(' \u00b7 ');
+    var m = document.getElementById('llm-model');
+    if (l.model) {
+      m.textContent = l.model;
+      m.className = 'llm-model';
+      m.style.display = '';
+    } else if (l.model_configured && state === 'active') {
+      m.textContent = 'loading\u2026';
+      m.className = 'llm-model loading';
+      m.style.display = '';
+    } else {
+      m.style.display = 'none';
+    }
+  }
+
+  // ── Disk card ────────────────────────────────────────────
+  function updateDisk(k) {
+    var card = document.getElementById('disk-card');
+    card.style.display = '';
+    card.className = 'card disk-card' +
+      (k.pct >= 95 ? ' dsk-crit' : k.pct >= 90 ? ' dsk-warn' : '');
+    document.getElementById('disk-bar').style.width = Math.min(k.pct, 100) + '%';
+    setText('disk-detail', k.used_gib + ' / ' + k.total_gib + ' GiB');
+    setText('disk-pct', k.pct + '%');
+    setText('disk-label', 'Disk \u00b7 ' + k.path);
   }
 
   // ── Stale detection ──────────────────────────────────────

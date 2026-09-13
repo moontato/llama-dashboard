@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import http.server
 import json
 import os
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -551,8 +553,9 @@ class ConfigTestCase(unittest.TestCase):
     CFG_KEYS = (
         "CONFIG_FILE", "PORT", "BIND_HOST", "RAM_WARN_PCT", "RAM_CRIT_PCT",
         "SWAP_WARN_PCT", "SWAP_CRIT_PCT", "LOG_TAIL_LINES",
-        "LLAMA_SERVER_SERVICE", "LLAMA_SERVER_PORT", "MODELS_DIR",
-        "MODELS_INI_FILE", "MODELS_INI_DIR", "RESTART_COOLDOWN_S",
+        "LLAMA_SERVER_SERVICE", "LLAMA_SERVER_PORT", "LLAMA_SERVER_HOST",
+        "MODELS_DIR", "MODELS_INI_FILE", "MODELS_INI_DIR",
+        "RESTART_COOLDOWN_S", "PROBE_INTERVAL_S",
     )
 
     def setUp(self):
@@ -597,6 +600,13 @@ class ConfigTestCase(unittest.TestCase):
         self._write_cfg({"port": 8888})
         os.environ["PORT"] = ""
         self.assertEqual(self.app_mod._cfg("port", 1), 8888)
+
+    def test_empty_file_value_falls_to_default(self):
+        # "llama_server_port": "" (disabled by default) must not warn or
+        # coerce to 0 — it means "unset".
+        self._write_cfg({"llama_server_port": ""})
+        self.assertEqual(self.app_mod._cfg("llama_server_port", 0), 0)
+        self.assertEqual(self.app_mod._cfg_int("llama_server_port", 0), 0)
 
     def test_default_when_nothing_set(self):
         os.environ["CONFIG_FILE"] = os.path.join(self.tmp, "absent.json")
@@ -682,6 +692,193 @@ class ConfigTestCase(unittest.TestCase):
         self.assertEqual(self.app_mod._models_dir(),
                          os.path.dirname(
                              self.app_mod.MODELS_INI_PATH))
+
+
+class ProbesTestCase(unittest.TestCase):
+    """Phase 2: llama-server status + model-disk probes (mocked)."""
+
+    ENV_KEYS = (
+        "CONFIG_FILE", "MODELS_INI_FILE", "MODELS_INI_DIR", "MODELS_DIR",
+        "LLAMA_SERVER_PORT", "LLAMA_SERVER_HOST", "LLAMA_SERVER_SERVICE",
+        "PROBE_INTERVAL_S",
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="modelsini-probe-")
+        self.prev = {k: os.environ.get(k) for k in self.ENV_KEYS}
+        for k in self.ENV_KEYS:
+            os.environ.pop(k, None)
+        os.environ["MODELS_INI_FILE"] = os.path.join(self.tmp, "models.ini")
+        import app as app_mod
+        self.app_mod = app_mod
+        self.client = app_mod.app.test_client()
+        self._saved: dict = {}
+
+    def tearDown(self):
+        for k, v in self.prev.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        for name, val in self._saved.items():
+            if name == "shutil.disk_usage":
+                self.app_mod.shutil.disk_usage = val
+            else:
+                setattr(self.app_mod, name, val)
+        self.app_mod._FILE_CFG = self.app_mod._load_config_file()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _patch(self, name, value):
+        self._saved.setdefault(name, getattr(self.app_mod, name))
+        setattr(self.app_mod, name, value)
+
+    # ── llama-server probe ───────────────────────────────────
+    def test_probe_active_with_model(self):
+        self._patch("_systemctl_is_active", lambda unit: "active")
+        self._patch("_systemctl_active_mono_us",
+                    lambda unit: int((time.monotonic() - 3700) * 1_000_000))
+        os.environ["LLAMA_SERVER_PORT"] = "11435"
+        self._patch("_llama_model_name",
+                    lambda host, port: "test-model.gguf")
+        out = self.app_mod._probe_llama_server()
+        self.assertEqual(out["state"], "active")
+        self.assertTrue(3690 <= out["uptime_s"] <= 3710)
+        self.assertEqual(out["model"], "test-model.gguf")
+        self.assertTrue(out["model_configured"])
+
+    def test_probe_inactive_skips_http(self):
+        self._patch("_systemctl_is_active", lambda unit: "inactive")
+        def boom(host, port):
+            raise AssertionError("HTTP probe must be skipped when inactive")
+        self._patch("_llama_model_name", boom)
+        os.environ["LLAMA_SERVER_PORT"] = "11435"
+        out = self.app_mod._probe_llama_server()
+        self.assertEqual(out["state"], "inactive")
+        self.assertIsNone(out["uptime_s"])
+        self.assertFalse(out["model_configured"])
+
+    def test_probe_unknown_unit(self):
+        self._patch("_systemctl_is_active", lambda unit: "unknown")
+        out = self.app_mod._probe_llama_server()
+        self.assertEqual(out["state"], "unknown")
+
+    def test_probe_without_port_skips_model_probe(self):
+        self._patch("_systemctl_is_active", lambda unit: "active")
+        self._patch("_systemctl_active_mono_us", lambda unit: None)
+        def boom(host, port):
+            raise AssertionError("HTTP probe must be skipped without a port")
+        self._patch("_llama_model_name", boom)
+        out = self.app_mod._probe_llama_server()
+        self.assertFalse(out["model_configured"])
+        self.assertIsNone(out["model"])
+
+    # ── HTTP model lookup (real local stub server) ──────────
+    def _serve(self, routes):
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path in routes:
+                    status, body = routes[self.path]
+                else:
+                    status, body = 404, b'{"error": "not found"}'
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv, srv.server_address[1]
+
+    def test_model_name_from_v1_models(self):
+        body = json.dumps({"data": [{"id": "test-model.gguf"}]}).encode()
+        srv, port = self._serve({"/v1/models": (200, body)})
+        try:
+            self.assertEqual(
+                self.app_mod._llama_model_name("127.0.0.1", port),
+                "test-model.gguf")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_model_name_falls_back_to_props(self):
+        body = json.dumps({"name": "fallback.gguf"}).encode()
+        srv, port = self._serve({"/props": (200, body)})
+        try:
+            self.assertEqual(
+                self.app_mod._llama_model_name("127.0.0.1", port),
+                "fallback.gguf")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_model_name_unreachable(self):
+        self.assertIsNone(self.app_mod._llama_model_name("127.0.0.1", 1))
+
+    # ── disk probe ───────────────────────────────────────────
+    def test_probe_disk(self):
+        u = type("U", (), {})
+        u.total = 931 * 1_073_741_824
+        u.used  = 342 * 1_073_741_824
+        u.free  = u.total - u.used
+        self._saved["shutil.disk_usage"] = self.app_mod.shutil.disk_usage
+        self.app_mod.shutil.disk_usage = lambda p: u
+        out = self.app_mod._probe_disk()
+        self.assertEqual(out["path"], self.tmp)
+        self.assertEqual(out["used_gib"], 342.0)
+        self.assertEqual(out["total_gib"], 931.0)
+        self.assertAlmostEqual(out["pct"], 36.7, places=1)
+
+    # ── SSE merge ────────────────────────────────────────────
+    def test_stream_payload_includes_probes(self):
+        m = self.app_mod
+        saved_probe = (m._probe_data["llama"], m._probe_data["disk"])
+        saved_conn, saved_latest, saved_board = (
+            m._data["connected"], m._data["latest"], m._data["board"])
+
+        class FakeJetson:
+            memory = {
+                "RAM":  {"tot": 32768, "used": 8192, "free": 24576,
+                         "shared": 2048},
+                "SWAP": {"tot": 16384, "used": 2048},
+            }
+            stats = {"CPU0": 1.0, "CPU1": 2.0, "GPU": 5.0,
+                     "Temp tj": 50.0, "Power TOT": 1000, "Fan pwmfan0": 10.0}
+
+        fake = m._build_payload(FakeJetson())
+        m._probe_data["llama"] = {"state": "active", "uptime_s": 90,
+                                  "model": "m.gguf",
+                                  "model_configured": True}
+        m._probe_data["disk"] = {"path": "/mnt/ssd", "used_gib": 1.0,
+                                 "total_gib": 2.0, "pct": 50.0}
+        with m._lock:
+            m._data["connected"] = True
+            m._data["latest"] = fake
+            m._data["board"] = {"model": "T", "jetpack": "1", "python": "3"}
+            m._data["history"]["ram_pct"].append(1.0)
+            m._data["history"]["gpu_pct"].append(2.0)
+        m._new_data.set()
+        try:
+            found, buf = None, ""
+            with self.client.get("/stream") as resp:
+                for chunk in resp.response:
+                    buf += chunk.decode("utf-8")
+                    while "\n\n" in buf:
+                        evt, buf = buf.split("\n\n", 1)
+                        if evt.startswith("data: ") and "thresholds" in evt:
+                            found = json.loads(evt[6:])
+                            break
+                    if found:
+                        break
+            self.assertIsNotNone(found, "no payload event seen in stream")
+            self.assertEqual(found["llama"]["model"], "m.gguf")
+            self.assertEqual(found["disk"]["pct"], 50.0)
+        finally:
+            m._probe_data["llama"], m._probe_data["disk"] = saved_probe
+            m._data["connected"], m._data["latest"], m._data["board"] = (
+                saved_conn, saved_latest, saved_board)
 
 
 if __name__ == "__main__":

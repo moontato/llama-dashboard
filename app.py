@@ -4,6 +4,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -50,12 +51,15 @@ _FILE_CFG = _load_config_file()
 
 
 def _cfg(key: str, default: Any = None) -> Any:
-    """Config value: env var (KEY upper-cased) > config.json > default."""
+    """Config value: env var (KEY upper-cased) > config.json > default.
+    Empty strings (env or file) count as unset, e.g. the disabled-by-
+    default "llama_server_port": ""."""
     env = os.environ.get(key.upper())
     if env not in (None, ""):
         return env
-    if key in _FILE_CFG:
-        return _FILE_CFG[key]
+    v = _FILE_CFG.get(key)
+    if v not in (None, ""):
+        return v
     return default
 
 
@@ -275,6 +279,8 @@ def stream() -> Response:
                 last_ts = payload["ts"]
                 out = dict(payload)
                 out["history"] = {"ram_pct": ram_h, "gpu_pct": gpu_h}
+                out["llama"] = _probe_data["llama"]
+                out["disk"] = _probe_data["disk"]
                 yield "data: " + json.dumps(out) + "\n\n"
 
     return Response(
@@ -315,6 +321,109 @@ def _journalctl_cmd() -> List[str]:
         "--no-pager", "--no-hostname",
         "-n", str(_cfg_int("log_tail_lines", 500)),
     ]
+
+
+# ────────────────── slow probes: llama-server & disk ─────────────
+# Probed on their own ~15 s ticker, never inside the 1 Hz payload
+# builder, so subprocess/HTTP latency can't stall telemetry.
+_PROBE_INTERVAL_S = _cfg_int("probe_interval_s", 15)
+_probe_data: Dict[str, Any] = {"llama": None, "disk": None}
+
+
+def _systemctl_is_active(unit: str) -> str:
+    """``systemctl is-active`` → state word (active/inactive/failed/…)."""
+    try:
+        r = subprocess.run(["systemctl", "is-active", unit],
+                           capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _systemctl_active_mono_us(unit: str) -> Optional[int]:
+    """CLOCK_MONOTONIC µs stamp of when the unit entered active state."""
+    try:
+        r = subprocess.run(["systemctl", "show", unit, "--value",
+                            "-p", "ActiveEnterTimestampMonotonic"],
+                           capture_output=True, text=True, timeout=5)
+        v = r.stdout.strip()
+        return int(v) if v.isdigit() else None
+    except Exception:
+        return None
+
+
+def _llama_model_name(host: str, port: int) -> Optional[str]:
+    """Loaded model name via the server's HTTP API — OpenAI-compat
+    /v1/models first, /props as fallback. None when unreachable (still
+    starting up, wrong port, …)."""
+    import urllib.request  # noqa: PLC0415
+    for path, extract in (
+        ("/v1/models",
+         lambda d: (d.get("data") or [{}])[0].get("id") if isinstance(d, dict) else None),
+        ("/props", lambda d: d.get("name") if isinstance(d, dict) else None),
+    ):
+        try:
+            with urllib.request.urlopen(
+                    f"http://{host}:{port}{path}", timeout=1.5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            name = extract(data)
+            if name:
+                return str(name)
+        except Exception:
+            continue
+    return None
+
+
+def _probe_llama_server() -> Dict[str, Any]:
+    unit = str(_cfg("llama_server_service", "llama-server.service"))
+    state = _systemctl_is_active(unit)
+    out: Dict[str, Any] = {"state": state, "uptime_s": None,
+                           "model": None, "model_configured": False}
+    if state != "active":
+        return out
+    mono = _systemctl_active_mono_us(unit)
+    if mono is not None:
+        up = time.monotonic() * 1_000_000 - mono
+        out["uptime_s"] = max(0, int(up // 1_000_000))
+    port = _cfg_int("llama_server_port", 0)
+    if port:
+        out["model_configured"] = True
+        out["model"] = _llama_model_name(
+            str(_cfg("llama_server_host", "127.0.0.1")), port)
+    return out
+
+
+def _probe_disk() -> Optional[Dict[str, Any]]:
+    """Usage of the filesystem holding the model dir (MODELS_DIR)."""
+    path = _models_dir()
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError:
+        return None
+    if not usage.total:
+        return None
+    return {
+        "path": path,
+        "used_gib":  round(usage.used  / 1_073_741_824, 1),
+        "total_gib": round(usage.total / 1_073_741_824, 1),
+        "pct":       round(usage.used / usage.total * 100.0, 1),
+    }
+
+
+def _probe_thread() -> None:
+    while True:
+        try:
+            _probe_data["llama"] = _probe_llama_server()
+        except Exception as exc:
+            print(f"[llama-dashboard] llama probe error: {exc}")
+            _probe_data["llama"] = {"state": "unknown", "uptime_s": None,
+                                    "model": None, "model_configured": False}
+        try:
+            _probe_data["disk"] = _probe_disk()
+        except Exception as exc:
+            print(f"[llama-dashboard] disk probe error: {exc}")
+            _probe_data["disk"] = None
+        time.sleep(_PROBE_INTERVAL_S)
 
 
 @app.route("/healthz")
@@ -832,4 +941,6 @@ def api_models_git() -> Response:
 if __name__ == "__main__":
     t = threading.Thread(target=_jtop_thread, daemon=True)
     t.start()
+    # Slow probes: llama-server status + model disk usage
+    threading.Thread(target=_probe_thread, daemon=True).start()
     app.run(host=BIND_HOST, port=PORT, threaded=True)
