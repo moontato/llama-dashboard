@@ -762,9 +762,13 @@
     }
   }
 
-  function swapClass(pct) {
-    if (pct >= 50) return 'card sw-crit';
-    if (pct >= 25) return 'card sw-warn';
+  function swapClass(pct, th) {
+    // thresholds come from the server (configurable); fall back to the
+    // historical defaults when an old backend is streaming
+    var warn = (th && th.swap_warn != null) ? th.swap_warn : 25;
+    var crit = (th && th.swap_crit != null) ? th.swap_crit : 50;
+    if (pct >= crit) return 'card sw-crit';
+    if (pct >= warn) return 'card sw-warn';
     return 'card';
   }
 
@@ -825,7 +829,7 @@
     setText('swap-pct',    swap.pct + '%');
     setText('swap-detail', swap.used_gib + ' / ' + swap.total_gib + ' GiB');
     document.getElementById('swap-bar').style.width = Math.min(swap.pct, 100) + '%';
-    document.getElementById('swap-card').className  = swapClass(swap.pct);
+    document.getElementById('swap-card').className  = swapClass(swap.pct, d.thresholds);
 
     // Shared
     setText('shared-val', ram.shared_gib);

@@ -16,17 +16,72 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 from models_ini import ModelsIniError, parse
 
-# ─────────────────────── Thresholds (tune here) ──────────────────
-RAM_WARN_PCT  = 85.0
-RAM_CRIT_PCT  = 93.0
-SWAP_WARN_PCT = 25.0
-SWAP_CRIT_PCT = 50.0
-
 # ─────────────────────── Config ──────────────────────────────────
-HISTORY_LEN        = 120   # ~2 min rolling window at 1 Hz
-BIND_HOST          = "127.0.0.1"
-PORT               = 8080
-RESTART_COOLDOWN_S = 30    # minimum seconds between llama-server restarts
+# Precedence: environment variable (key in upper case) > config.json
+# > built-in default. The config file is read once at import time, so
+# changes require a service restart. Set CONFIG_FILE to move it from
+# the default <app dir>/config.json (see config.example.json).
+
+def _config_file_path() -> str:
+    return os.environ.get("CONFIG_FILE") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+
+def _load_config_file() -> Dict[str, Any]:
+    """Parse the config file; a missing or broken file yields {} (the
+    app must never fail to start because of configuration)."""
+    path = _config_file_path()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        print(f"[llama-dashboard] ignoring config file {path}: {exc}")
+        return {}
+    if not isinstance(data, dict):
+        print(f"[llama-dashboard] ignoring config file {path}: "
+              "top level is not a JSON object")
+        return {}
+    return data
+
+
+_FILE_CFG = _load_config_file()
+
+
+def _cfg(key: str, default: Any = None) -> Any:
+    """Config value: env var (KEY upper-cased) > config.json > default."""
+    env = os.environ.get(key.upper())
+    if env not in (None, ""):
+        return env
+    if key in _FILE_CFG:
+        return _FILE_CFG[key]
+    return default
+
+
+def _cfg_int(key: str, default: int) -> int:
+    try:
+        return int(_cfg(key, default))
+    except (TypeError, ValueError):
+        print(f"[llama-dashboard] bad config {key.upper()}="
+              f"{_cfg(key, default)!r}; using {default}")
+        return int(default)
+
+
+def _cfg_float(key: str, default: float) -> float:
+    try:
+        return float(_cfg(key, default))
+    except (TypeError, ValueError):
+        print(f"[llama-dashboard] bad config {key.upper()}="
+              f"{_cfg(key, default)!r}; using {default}")
+        return float(default)
+
+
+HISTORY_LEN = _cfg_int("history_len", 120)   # ~2 min rolling window at 1 Hz
+BIND_HOST   = str(_cfg("bind_host", "127.0.0.1"))
+PORT        = _cfg_int("port", 8080)
+MODELS_INI_PATH = str(_cfg("models_ini_path",
+                           "/mnt/ssd/llamacpp_models/models_ini"))
 
 # ─────────────────────── Shared state ────────────────────────────
 # One mutable dict so inner functions never need `global`.
@@ -58,10 +113,21 @@ app = Flask(__name__, static_folder="static")
 
 # ─────────────────────── Helpers ─────────────────────────────────
 
+def _thresholds() -> Dict[str, float]:
+    """Warn/crit thresholds (config keys *_warn_pct / *_crit_pct)."""
+    return {
+        "ram_warn":  _cfg_float("ram_warn_pct", 85.0),
+        "ram_crit":  _cfg_float("ram_crit_pct", 93.0),
+        "swap_warn": _cfg_float("swap_warn_pct", 25.0),
+        "swap_crit": _cfg_float("swap_crit_pct", 50.0),
+    }
+
+
 def _severity(ram_pct: float, swap_pct: float) -> str:
+    t = _thresholds()
     order = {"ok": 0, "warn": 1, "critical": 2}
-    r = "critical" if ram_pct  >= RAM_CRIT_PCT  else ("warn" if ram_pct  >= RAM_WARN_PCT  else "ok")
-    s = "critical" if swap_pct >= SWAP_CRIT_PCT else ("warn" if swap_pct >= SWAP_WARN_PCT else "ok")
+    r = "critical" if ram_pct  >= t["ram_crit"]  else ("warn" if ram_pct  >= t["ram_warn"]  else "ok")
+    s = "critical" if swap_pct >= t["swap_crit"] else ("warn" if swap_pct >= t["swap_warn"] else "ok")
     return max(r, s, key=lambda x: order[x])
 
 
@@ -108,6 +174,9 @@ def _build_payload(jetson: Any) -> Dict[str, Any]:
         "fan_pct": round(float(st.get("Fan pwmfan0", 0)), 1),
         "nvp":     st.get("nvp model", ""),
         "state":   _severity(ram_pct, swap_pct),
+        # sent with every tick so the UI colours bars with the same
+        # thresholds the server uses for `state`
+        "thresholds": _thresholds(),
     }
 
 
@@ -239,10 +308,12 @@ def _stop_log_stream() -> None:
 
 
 def _journalctl_cmd() -> List[str]:
-    """Return the journalctl command to stream llama-server logs."""
+    """Return the journalctl command to stream the llama-server logs."""
     return [
-        "sudo", "journalctl", "-f", "-u", "llama-server.service",
-        "--no-pager", "--no-hostname", "-n", "500",
+        "sudo", "journalctl", "-f", "-u",
+        str(_cfg("llama_server_service", "llama-server.service")),
+        "--no-pager", "--no-hostname",
+        "-n", str(_cfg_int("log_tail_lines", 500)),
     ]
 
 
@@ -310,16 +381,18 @@ def logs_llama_server() -> Response:
 
 @app.route("/api/restart-llama", methods=["POST"])
 def restart_llama() -> Response:
+    cooldown = _cfg_int("restart_cooldown_s", 30)
     with _restart_lock:
         elapsed = time.time() - _restart_state["last_ts"]
-        if elapsed < RESTART_COOLDOWN_S:
-            remaining = int(RESTART_COOLDOWN_S - elapsed)
+        if elapsed < cooldown:
+            remaining = int(cooldown - elapsed)
             return jsonify({"ok": False, "error": f"Cooldown: wait {remaining} s"}), 429
         _restart_state["last_ts"] = time.time()
 
     try:
         result = subprocess.run(
-            ["sudo", "systemctl", "restart", "llama-server.service"],
+            ["sudo", "systemctl", "restart",
+             str(_cfg("llama_server_service", "llama-server.service"))],
             capture_output=True,
             text=True,
             timeout=15,
@@ -365,6 +438,23 @@ def _ini_dir() -> str:
         if r.returncode == 0:
             return cand
     return fallback
+
+
+def _models_dir() -> str:
+    """Root directory of the model files (where *.gguf live).
+
+    Explicit ``models_dir`` (env or config) wins; otherwise derived from
+    the ini location, which works for both layouts: a file ini at
+    ``/x/models.ini`` → ``/x``, and the dir layout
+    ``/x/models_ini[/models.ini]`` → ``/x``.
+    """
+    d = _cfg("models_dir", None)
+    if d:
+        return str(d)
+    base = (os.environ.get("MODELS_INI_FILE")
+            or os.environ.get("MODELS_INI_DIR")
+            or MODELS_INI_PATH)
+    return os.path.dirname(base) or "."
 
 
 _models_gate = {"ok": False, "reason": "not checked"}

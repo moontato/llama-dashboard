@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -542,6 +543,145 @@ class ApiTestCase(unittest.TestCase):
         code, d = self.get()
         self.assertEqual(code, 200)
         self.assertIn(["fetch", "origin", "main"], self._git_calls())
+
+
+class ConfigTestCase(unittest.TestCase):
+    """Config externalization: env > config.json > built-in default."""
+
+    CFG_KEYS = (
+        "CONFIG_FILE", "PORT", "BIND_HOST", "RAM_WARN_PCT", "RAM_CRIT_PCT",
+        "SWAP_WARN_PCT", "SWAP_CRIT_PCT", "LOG_TAIL_LINES",
+        "LLAMA_SERVER_SERVICE", "LLAMA_SERVER_PORT", "MODELS_DIR",
+        "MODELS_INI_FILE", "MODELS_INI_DIR", "RESTART_COOLDOWN_S",
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="modelsini-cfg-")
+        self.prev = {k: os.environ.get(k) for k in self.CFG_KEYS}
+        for k in self.CFG_KEYS:
+            os.environ.pop(k, None)
+        import app as app_mod
+        self.app_mod = app_mod
+        self.client = app_mod.app.test_client()
+
+    def tearDown(self):
+        for k, v in self.prev.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        # drop any test config file, as a fresh import would see it
+        self.app_mod._FILE_CFG = self.app_mod._load_config_file()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write_cfg(self, data) -> None:
+        p = Path(self.tmp) / "config.json"
+        p.write_text(data if isinstance(data, str) else json.dumps(data),
+                     encoding="utf-8")
+        os.environ["CONFIG_FILE"] = str(p)
+        # the app loads the file at import time; pick up test changes
+        self.app_mod._FILE_CFG = self.app_mod._load_config_file()
+
+    # ── file loading ────────────────────────────────────────
+    def test_file_beats_default(self):
+        self._write_cfg({"port": 8888, "log_tail_lines": 42})
+        self.assertEqual(self.app_mod._cfg("port", 1), 8888)
+        self.assertEqual(self.app_mod._cfg_int("log_tail_lines", 500), 42)
+
+    def test_env_beats_file(self):
+        self._write_cfg({"port": 8888})
+        os.environ["PORT"] = "9999"
+        self.assertEqual(self.app_mod._cfg("port", 1), "9999")
+
+    def test_empty_env_falls_through_to_file(self):
+        self._write_cfg({"port": 8888})
+        os.environ["PORT"] = ""
+        self.assertEqual(self.app_mod._cfg("port", 1), 8888)
+
+    def test_default_when_nothing_set(self):
+        os.environ["CONFIG_FILE"] = os.path.join(self.tmp, "absent.json")
+        self.app_mod._FILE_CFG = self.app_mod._load_config_file()
+        self.assertEqual(self.app_mod._cfg("port", 8080), 8080)
+        self.assertEqual(self.app_mod._cfg_int("history_len", 120), 120)
+
+    def test_missing_file_is_ignored(self):
+        os.environ["CONFIG_FILE"] = os.path.join(self.tmp, "absent.json")
+        self.assertEqual(self.app_mod._load_config_file(), {})
+
+    def test_broken_file_is_ignored(self):
+        self._write_cfg("{ not json")
+        self.assertEqual(self.app_mod._FILE_CFG, {})
+        self.assertEqual(self.app_mod._cfg("port", 8080), 8080)
+        self._write_cfg("[1, 2]")
+        self.assertEqual(self.app_mod._FILE_CFG, {})
+
+    def test_coercion_and_bad_values(self):
+        self._write_cfg({"port": "9191", "ram_warn_pct": "82.5"})
+        self.assertEqual(self.app_mod._cfg_int("port", 8080), 9191)
+        self.assertEqual(self.app_mod._cfg_float("ram_warn_pct", 85.0), 82.5)
+        os.environ["PORT"] = "not-a-number"
+        self.assertEqual(self.app_mod._cfg_int("port", 8080), 8080)
+
+    # ── consumers read config ───────────────────────────────
+    def test_severity_uses_configured_thresholds(self):
+        self.assertEqual(self.app_mod._severity(84.0, 0.0), "ok")
+        os.environ["RAM_WARN_PCT"] = "50"
+        self.assertEqual(self.app_mod._severity(84.0, 0.0), "warn")
+        os.environ["RAM_CRIT_PCT"] = "80"
+        self.assertEqual(self.app_mod._severity(84.0, 0.0), "critical")
+        os.environ["SWAP_CRIT_PCT"] = "10"
+        self.assertEqual(self.app_mod._severity(0.0, 20.0), "critical")
+
+    def test_journalctl_cmd_uses_config(self):
+        cmd = self.app_mod._journalctl_cmd()
+        self.assertIn("llama-server.service", cmd)
+        self.assertEqual(cmd[cmd.index("-n") + 1], "500")
+        os.environ["LLAMA_SERVER_SERVICE"] = "my-llama.service"
+        os.environ["LOG_TAIL_LINES"] = "77"
+        cmd = self.app_mod._journalctl_cmd()
+        self.assertIn("my-llama.service", cmd)
+        self.assertEqual(cmd[cmd.index("-n") + 1], "77")
+
+    def test_restart_cooldown_from_config(self):
+        os.environ["RESTART_COOLDOWN_S"] = "60"
+        self.app_mod._restart_state["last_ts"] = time.time()
+        r = self.client.post("/api/restart-llama")
+        self.assertEqual(r.status_code, 429)
+        self.assertIn("Cooldown", r.get_json()["error"])
+
+    def test_payload_carries_thresholds(self):
+        class FakeJetson:
+            memory = {
+                "RAM": {"tot": 1000, "used": 500, "free": 400, "shared": 50},
+                "SWAP": {"tot": 100, "used": 10},
+            }
+            stats = {
+                "CPU0": 12.0, "CPU1": 34.0, "GPU": 55.0, "Temp tj": 61.5,
+                "Power TOT": 42000, "Fan pwmfan0": 30.0, "nvp model": "max",
+            }
+
+        p = self.app_mod._build_payload(FakeJetson())
+        self.assertEqual(p["thresholds"],
+                         {"ram_warn": 85.0, "ram_crit": 93.0,
+                          "swap_warn": 25.0, "swap_crit": 50.0})
+        os.environ["SWAP_WARN_PCT"] = "33"
+        self.assertEqual(
+            self.app_mod._build_payload(FakeJetson())["thresholds"]["swap_warn"],
+            33.0)
+
+    # ── models dir derivation ───────────────────────────────
+    def test_models_dir_explicit_wins(self):
+        os.environ["MODELS_DIR"] = "/data/models"
+        self.assertEqual(self.app_mod._models_dir(), "/data/models")
+
+    def test_models_dir_derived_from_ini_file_env(self):
+        os.environ["MODELS_INI_FILE"] = os.path.join(self.tmp, "models.ini")
+        self.assertEqual(self.app_mod._models_dir(), self.tmp)
+
+    def test_models_dir_default_is_ini_parent(self):
+        self.assertEqual(self.app_mod._models_dir(),
+                         os.path.dirname(
+                             self.app_mod.MODELS_INI_PATH))
 
 
 if __name__ == "__main__":

@@ -1,4 +1,10 @@
 *.md
 !deploy/README.md
 
+# local dashboard config (see config.example.json)
+config.json
+
 *.pyc
+
+# local python venv
+.venv/

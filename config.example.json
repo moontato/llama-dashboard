@@ -1,0 +1,14 @@
+{
+  "bind_host": "127.0.0.1",
+  "port": 8080,
+  "ram_warn_pct": 85.0,
+  "ram_crit_pct": 93.0,
+  "swap_warn_pct": 25.0,
+  "swap_crit_pct": 50.0,
+  "history_len": 120,
+  "restart_cooldown_s": 30,
+  "models_ini_path": "/mnt/ssd/llamacpp_models/models_ini",
+  "llama_server_service": "llama-server.service",
+  "llama_server_port": "",
+  "log_tail_lines": 500
+}

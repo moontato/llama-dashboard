@@ -161,6 +161,40 @@ curl -N https://orinserver.tailbf896b.ts.net/healthz
 
 Navigate to `https://orinserver.tailbf896b.ts.net` from any device on the tailnet.
 
+## Configuration (optional)
+
+Every runtime setting has a built-in default (see `config.example.json`).
+To customize on the Orin:
+
+```bash
+sudo cp /opt/llama-dashboard/config.example.json /opt/llama-dashboard/config.json
+sudo chown llama-dashboard:llama-dashboard /opt/llama-dashboard/config.json
+sudo nano /opt/llama-dashboard/config.json     # edit what you need
+sudo systemctl restart llama-dashboard
+```
+
+`config.json` is git-ignored — it holds machine-specific values. The file is
+read at startup, so a restart is required after changes. Set the
+`CONFIG_FILE` environment variable to move it elsewhere.
+
+**Precedence:** environment variable > `config.json` > built-in default.
+Env vars are the key name in upper case (e.g. `PORT`, `RAM_WARN_PCT`) and can
+be set via an `Environment=` drop-in (`sudo systemctl edit llama-dashboard`).
+
+| key | env var | default | meaning |
+|-----|---------|---------|---------|
+| `bind_host` | `BIND_HOST` | `127.0.0.1` | listen address (Tailscale Serve proxies to it) |
+| `port` | `PORT` | `8080` | listen port |
+| `ram_warn_pct` / `ram_crit_pct` | `RAM_WARN_PCT` / `RAM_CRIT_PCT` | `85` / `93` | RAM thresholds: card colour, title, browser notification |
+| `swap_warn_pct` / `swap_crit_pct` | `SWAP_WARN_PCT` / `SWAP_CRIT_PCT` | `25` / `50` | swap (zram) thresholds, same uses |
+| `history_len` | `HISTORY_LEN` | `120` | sparkline window length in samples (~1 Hz) |
+| `restart_cooldown_s` | `RESTART_COOLDOWN_S` | `30` | minimum seconds between llama-server restarts |
+| `models_ini_path` | `MODELS_INI_PATH` | `/mnt/ssd/llamacpp_models/models_ini` | the ini file, or the directory containing it. (`MODELS_INI_FILE` / `MODELS_INI_DIR` still take precedence — used by the test suite) |
+| `models_dir` | `MODELS_DIR` | parent of the ini path | root of the model files (`*.gguf`, mmproj, MTP) |
+| `llama_server_service` | `LLAMA_SERVER_SERVICE` | `llama-server.service` | unit the Restart button and log tail target — update the sudoers rule in step 3 if you rename it |
+| `llama_server_port` | `LLAMA_SERVER_PORT` | *(empty = off)* | llama-server HTTP port, for the loaded-model display (used by a later feature; empty disables the probe) |
+| `log_tail_lines` | `LOG_TAIL_LINES` | `500` | lines the log viewer fetches when opened |
+
 ---
 
 ## Tear down
