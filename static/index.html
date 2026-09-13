@@ -421,6 +421,19 @@
       white-space: nowrap;
     }
     .mi-badge-arch { background: rgba(239,68,68,0.12); border-color: var(--crit); color: var(--crit); }
+    .mi-badge-missing {
+      background: var(--crit); border-color: var(--crit); color: #fff;
+    }
+    .mi-model.missing { color: var(--crit); }
+    .mi-model .mi-size { color: var(--muted); font-weight: 400; }
+
+    /* ── Section filter + file pickers ──────────────── */
+    .mi-filterbar {
+      display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem;
+    }
+    .mi-filterbar input { flex: 1; }
+    .mi-filter-count { font-size: 0.68rem; color: var(--muted); white-space: nowrap; }
+    .mi-row.mi-hidden, .mi-region-wrap.mi-all-hidden { display: none; }
     .mi-detail {
       display: none;
       width: 100%;
@@ -609,6 +622,12 @@
   <details class="card advanced-card" id="models-card">
     <summary class="card-label advanced-summary">models &middot; models.ini</summary>
     <div class="advanced-body">
+    <div class="mi-filterbar">
+      <input id="mi-filter" class="mi-input" type="search"
+             placeholder="filter sections — name, region, model, param&hellip;"
+             autocomplete="off">
+      <span class="mi-filter-count" id="mi-filter-count"></span>
+    </div>
     <div id="models-git-line" class="shared-line"></div>
     <div id="models-table"></div>
 
@@ -641,7 +660,7 @@
             <select id="mi-add-copy-from" class="mi-input mi-writable"></select>
             <button class="mini-btn mi-writable" onclick="miAddCopyFrom()">copy</button>
           </div></div>
-        <label class="mi-field"><span>model</span><input id="mi-add-model" class="mi-input" placeholder="/mnt/ssd/llamacpp_models/...gguf"></label>
+        <label class="mi-field"><span>model</span><input id="mi-add-model" class="mi-input" list="mi-dl-gguf" placeholder="/mnt/ssd/llamacpp_models/...gguf"></label>
         <label class="mi-field"><span>params &mdash; one per line: key = value</span>
           <textarea id="mi-add-params" class="mi-input" rows="3" placeholder="temp = 0.7&#10;ctx-size = 131072"></textarea></label>
         <button class="mini-btn mi-primary mi-writable" onclick="miAdd()">add</button>
@@ -659,7 +678,7 @@
             <select id="mi-copy-from" class="mi-input mi-writable"></select>
             <button class="mini-btn mi-writable" onclick="miCopyFrom()">copy</button>
           </div></div>
-        <label class="mi-field"><span>model</span><input id="mi-model" class="mi-input"></label>
+        <label class="mi-field"><span>model</span><input id="mi-model" class="mi-input" list="mi-dl-gguf"></label>
         <div class="mi-field"><span>params</span><div id="mi-params"></div>
           <button class="mini-btn mi-writable" onclick="miAddParam('','')">+ param</button></div>
         <div class="mini-actions">
@@ -1167,11 +1186,78 @@ function miOpStatus(id, msg, ok) {
   el.className = 'restart-status ' + (ok ? 'ok' : 'err');
 }
 
+function miGiB(bytes) {
+  var g = bytes / 1073741824;
+  return (g >= 10 ? Math.round(g) : g.toFixed(1)) + ' GiB';
+}
+
+var miFiles = null;   // cached /api/models/files payload
+var miFilter = '';    // active section filter query
+
+function miDlForKey(key) {
+  var kk = String(key || '').toLowerCase();
+  if (kk === 'mmproj') return 'mi-dl-mmproj';
+  if (kk === 'model-draft' || kk === 'draft') return 'mi-dl-mtp';
+  return '';
+}
+
+function miLoadFiles() {
+  fetch('/api/models/files')
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d && d.ok) { miFiles = d; miFillDatalists(); }
+    })
+    .catch(function () {});
+}
+
+function miFillDatalists() {
+  if (!miFiles) return;
+  var cats = { 'mi-dl-gguf': 'gguf', 'mi-dl-mmproj': 'mmproj', 'mi-dl-mtp': 'mtp' };
+  Object.keys(cats).forEach(function (id) {
+    var dl = miEl(id);
+    dl.innerHTML = '';
+    miFiles[cats[id]].forEach(function (f) {
+      var opt = document.createElement('option');
+      opt.value = f.path;
+      opt.label = f.rel + '  (' + f.size_gib.toFixed(1) + ' GiB)';
+      dl.appendChild(opt);
+    });
+  });
+}
+
+function miApplyFilter() {
+  var q = miFilter.trim().toLowerCase();
+  var rows = document.querySelectorAll('#models-table .mi-row');
+  var shown = 0;
+  Array.prototype.forEach.call(rows, function (row) {
+    var hit = !q || row.dataset.search.indexOf(q) !== -1;
+    row.classList.toggle('mi-hidden', !hit);
+    if (hit) shown++;
+  });
+  Array.prototype.forEach.call(
+    document.querySelectorAll('#models-table .mi-region-wrap'),
+    function (wrap) {
+      var any = wrap.querySelector('.mi-row:not(.mi-hidden)');
+      wrap.classList.toggle('mi-all-hidden', !any);
+      if (q && any) {            // force-open regions while filtering
+        var rg = any.dataset.region;
+        miRegionOpen[rg] = true;
+        wrap.classList.remove('closed');
+        var chev = wrap.querySelector('.mi-chev');
+        if (chev) chev.textContent = '\u25be';
+      }
+    });
+  miEl('mi-filter-count').textContent = q ? shown + ' / ' + rows.length : '';
+}
+
 function miRenderRow(s, i, reorder, ro) {
   var row = document.createElement('div');
   row.className = 'mi-row' + (s.archived ? ' archived' : '');
   row.dataset.region = s.region;
   row.dataset.name = s.name;
+  row.dataset.search = [s.name, s.region, s.model || '',
+    (s.keys || []).map(function (kv) { return kv.key + ' ' + kv.value; }).join(' ')
+  ].join(' ').toLowerCase();
 
   var cell = document.createElement('div');
   cell.className = 'mi-cell';
@@ -1185,6 +1271,14 @@ function miRenderRow(s, i, reorder, ro) {
     archBadge.className = 'mi-badge mi-badge-arch';
     archBadge.textContent = 'archived';
     nameEl.appendChild(archBadge);
+  }
+
+  if (s.model_exists === false) {
+    var miss = document.createElement('span');
+    miss.className = 'mi-badge mi-badge-missing';
+    miss.textContent = 'missing';
+    miss.title = 'model file not found: ' + s.model;
+    nameEl.appendChild(miss);
   }
 
   var trigger = document.createElement('button');
@@ -1231,7 +1325,19 @@ function miRenderRow(s, i, reorder, ro) {
 
   var modelEl = document.createElement('div');
   modelEl.className = 'mi-model';
-  modelEl.textContent = s.model || '(no model)';
+  if (s.model) {
+    modelEl.appendChild(document.createTextNode(s.model.split('/').pop()));
+    if (s.model_size_bytes != null) {
+      var sz = document.createElement('span');
+      sz.className = 'mi-size';
+      sz.textContent = ' \u00b7 ' + miGiB(s.model_size_bytes);
+      modelEl.appendChild(sz);
+    }
+    if (s.model_exists === false) modelEl.classList.add('missing');
+    modelEl.title = s.model + (s.model_exists === false ? ' \u2014 file missing' : '');
+  } else {
+    modelEl.textContent = '(no model)';
+  }
   cell.appendChild(modelEl);
 
   var actions = document.createElement('div');
@@ -1453,6 +1559,8 @@ function miRender(d) {
   );
   var raw = miEl('mi-raw-text');
   if (raw) raw.readOnly = ro;
+
+  miApplyFilter();
 }
 
 function miLoad() {
@@ -1531,6 +1639,8 @@ function miParamRow(key, value) {
 
   var k = document.createElement('input'); k.className = 'mi-k mi-input'; k.value = key;
   var v = document.createElement('input'); v.className = 'mi-v mi-input'; v.value = value;
+  v.list = miDlForKey(key);            // file picker for mmproj / model-draft
+  k.addEventListener('input', function () { v.list = miDlForKey(k.value); });
   var del = document.createElement('button');
   del.className = 'mini-btn mi-danger';
   del.textContent = '✕';
@@ -1683,6 +1793,7 @@ function miRevertEdit() {
 }
 
 function miEdit(i) {
+  miLoadFiles();                       // keep the pickers fresh
   var s = miData.models[i];
   miEditArchived = !!s.archived;
   miEl('mi-name').value = s.name;
@@ -1847,6 +1958,20 @@ document.addEventListener('keydown', function (e) {
   });
 })();
 
+  // section filter (#1)
+  miEl('mi-filter').addEventListener('input', function () {
+    miFilter = this.value;
+    miApplyFilter();
+  });
+  // lazy-load file pickers when the models card opens (#3)
+  miEl('models-card').addEventListener('toggle', function () {
+    if (this.open && !miFiles) miLoadFiles();
+  });
+
 miLoad();</script>
+
+  <datalist id="mi-dl-gguf"></datalist>
+  <datalist id="mi-dl-mmproj"></datalist>
+  <datalist id="mi-dl-mtp"></datalist>
 </body>
 </html>

@@ -899,5 +899,92 @@ class ProbesTestCase(unittest.TestCase):
                 saved_conn, saved_latest, saved_board)
 
 
+class ModelsFilesTestCase(unittest.TestCase):
+    """Phase 3: /api/models/files scan + model_exists in the section view."""
+
+    ENV_KEYS = ("CONFIG_FILE", "MODELS_INI_FILE", "MODELS_INI_DIR",
+                "MODELS_DIR")
+    GIB = 1_073_741_824
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="modelsini-files-")
+        self.prev = {k: os.environ.get(k) for k in self.ENV_KEYS}
+        for k in self.ENV_KEYS:
+            os.environ.pop(k, None)
+        os.environ["MODELS_INI_FILE"] = os.path.join(self.tmp, "models.ini")
+        tree = (("models", "Qwen.gguf", 5 * self.GIB),
+                ("models/nested", "deep.gguf", 1024),
+                ("mmproj", "mmproj-F.gguf", 2 * self.GIB),
+                ("mtp", "mtp-Q.gguf", 3 * self.GIB))
+        for sub, fname, size in tree:
+            d = os.path.join(self.tmp, *sub.split("/"))
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, fname), "wb") as fh:
+                fh.truncate(size)   # sparse: no real disk usage
+        with open(os.path.join(self.tmp, "models", "notes.txt"), "wb") as fh:
+            fh.write(b"not a model")
+        import app as app_mod
+        self.app_mod = app_mod
+        self.client = app_mod.app.test_client()
+
+    def tearDown(self):
+        for k, v in self.prev.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self.app_mod._FILE_CFG = self.app_mod._load_config_file()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_files_endpoint_categorizes(self):
+        d = self.client.get("/api/models/files").get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["root"], self.tmp)
+        self.assertEqual([e["rel"] for e in d["gguf"]],
+                         ["models/nested/deep.gguf", "models/Qwen.gguf"])
+        self.assertEqual([e["rel"] for e in d["mmproj"]],
+                         ["mmproj/mmproj-F.gguf"])
+        self.assertEqual([e["rel"] for e in d["mtp"]], ["mtp/mtp-Q.gguf"])
+        qwen = d["gguf"][-1]
+        self.assertEqual(qwen["path"], os.path.join(self.tmp, "models",
+                                                     "Qwen.gguf"))
+        self.assertEqual(qwen["size_gib"], 5.0)
+        self.assertIsInstance(qwen["mtime"], int)
+
+    def test_files_missing_root(self):
+        os.environ["MODELS_DIR"] = os.path.join(self.tmp, "nope")
+        d = self.client.get("/api/models/files").get_json()
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["gguf"], [])
+        self.assertEqual(d["mmproj"], [])
+        self.assertEqual(d["mtp"], [])
+
+    def test_section_view_model_exists(self):
+        ini = ("version = 1\n\n"
+               "[Good]\nmodel = {g}\ntemp = 0.7\n\n"
+               "[Bad]\nmodel = {b}\n").format(
+                   g=os.path.join(self.tmp, "models", "Qwen.gguf"),
+                   b=os.path.join(self.tmp, "models", "nope.gguf"))
+        with open(self.app_mod._ini_file(), "w", encoding="utf-8") as fh:
+            fh.write(ini)
+        d = self.client.get("/api/models").get_json()
+        self.assertTrue(d["ok"])
+        by_name = {m["name"]: m for m in d["models"]}
+        self.assertTrue(by_name["Good"]["model_exists"])
+        self.assertEqual(by_name["Good"]["model_size_bytes"],
+                         5 * self.GIB)
+        self.assertFalse(by_name["Bad"]["model_exists"])
+        self.assertIsNone(by_name["Bad"]["model_size_bytes"])
+
+    def test_section_view_no_model_key(self):
+        with open(self.app_mod._ini_file(), "w", encoding="utf-8") as fh:
+            fh.write("version = 1\n\n[NoModel]\ntemp = 0.7\n")
+        d = self.client.get("/api/models").get_json()
+        m = d["models"][0]
+        self.assertEqual(m["name"], "NoModel")
+        self.assertIsNone(m["model_exists"])
+        self.assertIsNone(m["model_size_bytes"])
+
+
 if __name__ == "__main__":
     unittest.main()

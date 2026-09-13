@@ -657,12 +657,54 @@ def _mutate(fn):
 def _section_view(b) -> Dict[str, Any]:
     keys = []
     model = ""
+    model_exists: Optional[bool] = None
+    model_size_bytes: Optional[int] = None
     for k, v in b.keys():
         keys.append({"key": k, "value": v})
         if k == "model":
             model = v
+    if model:
+        try:
+            st = os.stat(model)
+            model_exists = True
+            model_size_bytes = st.st_size
+        except OSError:
+            model_exists = False
     return {"name": b.name, "region": b.region, "archived": b.archived,
-            "model": model, "keys": keys}
+            "model": model, "model_exists": model_exists,
+            "model_size_bytes": model_size_bytes, "keys": keys}
+
+
+def _scan_model_files() -> Dict[str, List[Dict[str, Any]]]:
+    """Recursively scan the model root for ``*.gguf`` files, categorized
+    for the file pickers: mmproj by name, mtp by directory, rest gguf.
+    Returns {category: [{path, rel, size_gib, mtime}, …]} sorted by path."""
+    root = _models_dir()
+    entries: List[Dict[str, Any]] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for fn in sorted(filenames):
+            if not fn.lower().endswith(".gguf"):
+                continue
+            p = os.path.join(dirpath, fn)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue          # vanished or unreadable — skip silently
+            rel = os.path.relpath(p, root)
+            if fn.lower().startswith("mmproj"):
+                cat = "mmproj"
+            elif "mtp" in rel.lower().split(os.sep):
+                cat = "mtp"
+            else:
+                cat = "gguf"
+            entries.append({"path": p, "rel": rel,
+                            "size_gib": round(st.st_size / 1_073_741_824, 2),
+                            "mtime": int(st.st_mtime), "cat": cat})
+    out: Dict[str, List[Dict[str, Any]]] = {"gguf": [], "mmproj": [], "mtp": []}
+    for e in sorted(entries, key=lambda x: x["rel"].lower()):
+        out[e.pop("cat")].append(e)
+    return out
 
 
 def _git(*args, timeout: int = 60):
@@ -739,6 +781,11 @@ def api_models() -> Response:
         "raw": _text,
         "git": git,
     })
+
+
+@app.route("/api/models/files", methods=["GET"])
+def api_models_files() -> Response:
+    return jsonify({"ok": True, "root": _models_dir(), **_scan_model_files()})
 
 
 @app.route("/api/models/raw", methods=["POST"])
