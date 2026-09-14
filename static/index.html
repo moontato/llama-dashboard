@@ -536,9 +536,12 @@
     }
     .mi-copy-row { display: flex; gap: 0.4rem; align-items: center; }
     .mi-copy-row select { flex: 1; min-width: 0; }
-    .mi-raw-wrap { display: flex; width: 100%; align-items: stretch; }
+    /* fixed-height editor: nothing content-driven (gutter line count,
+       highlight lines) may inflate the box, or the pre overflows the
+       textarea and the lower text is unclickable */
+    .mi-raw-wrap { display: flex; width: 100%; }
     .mi-raw-gutter {
-      flex: none; width: 2.6rem; overflow: hidden;
+      flex: none; width: 2.6rem; height: 320px; overflow: hidden;
       background: #0d0d12; border: 1px solid var(--border); border-right: none;
       border-radius: 6px 0 0 6px;
       font-family: ui-monospace, 'SF Mono', 'Fira Code', Consolas, monospace;
@@ -547,12 +550,13 @@
       color: var(--muted); text-align: right; user-select: none;
     }
     .mi-raw-stack {
-      position: relative; flex: 1; min-width: 0;
+      position: relative; flex: 1; min-width: 0; height: 320px;
       background: var(--bg); border: 1px solid var(--border);
       border-radius: 0 6px 6px 0;
     }
     .mi-raw-hl {
-      position: absolute; inset: 0; margin: 0; overflow: hidden;
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      margin: 0; overflow: hidden;
       pointer-events: none;
       font-family: ui-monospace, 'SF Mono', 'Fira Code', Consolas, monospace;
       font-size: 0.78rem; line-height: 1.5;
@@ -566,16 +570,14 @@
     .mi-raw-hl .mi-hl-com,
     .mi-raw-hl .mi-hl-marker { color: var(--muted); }
     .mi-raw-textarea {
-      position: relative; z-index: 2;
-      width: 100%;
-      min-height: 320px;
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
       background: transparent;
       border: none; border-radius: 0;
       color: transparent; caret-color: var(--text);
       font-family: ui-monospace, 'SF Mono', 'Fira Code', Consolas, monospace;
       font-size: 0.78rem; line-height: 1.5;
       padding: 0.5rem;
-      resize: vertical;
+      resize: none;
       white-space: pre;
       overflow: auto;
       tab-size: 4;
