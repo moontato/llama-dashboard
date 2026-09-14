@@ -1084,7 +1084,10 @@
     var m = document.getElementById('llm-model');
     if (l.model) {
       if (l.model_status === 'unloaded') {
-        m.textContent = 'idle \u00b7 ' + l.model;
+        // preset builds report the preset name as the model id even when
+        // the slot is empty — showing it reads as "that model is loaded",
+        // so in the empty state we drop the name entirely
+        m.textContent = 'no model loaded';
         m.className = 'llm-model loading';
       } else if (l.model_status === 'loading') {
         m.textContent = 'loading ' + l.model + '\u2026';
