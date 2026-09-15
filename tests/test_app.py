@@ -816,16 +816,80 @@ class ProbesTestCase(unittest.TestCase):
             srv.shutdown()
             srv.server_close()
 
-    def test_model_info_unloaded_status(self):
-        # the Orin's models-preset build: preset name + status "unloaded"
-        body = json.dumps({"data": [{"id": "Code-medium",
-                                     "status": {"value": "unloaded",
-                                                "args": []}}]}).encode()
+    def test_model_info_picks_loaded_entry_not_first(self):
+        # the router lists every preset from the ini (roughly
+        # alphabetical); the live one is whichever has status "loaded",
+        # not items[0]
+        body = json.dumps({"data": [
+            {"id": "Code-medium",
+             "status": {"value": "unloaded", "args": []}},
+            {"id": "General-medium",
+             "status": {"value": "loaded", "args": []}},
+            {"id": "gemma-4-12B",
+             "status": {"value": "unloaded", "args": []}},
+        ]}).encode()
         srv, port = self._serve({"/v1/models": (200, body)})
         try:
             info = self.app_mod._llama_model_info("127.0.0.1", port)
-            self.assertEqual(info, {"name": "Code-medium",
-                                    "status": "unloaded"})
+            self.assertEqual(info, {"name": "General-medium",
+                                    "status": "loaded"})
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_model_info_prefers_loaded_over_loading(self):
+        body = json.dumps({"data": [
+            {"id": "A", "status": {"value": "loading"}},
+            {"id": "B", "status": {"value": "loaded"}},
+        ]}).encode()
+        srv, port = self._serve({"/v1/models": (200, body)})
+        try:
+            info = self.app_mod._llama_model_info("127.0.0.1", port)
+            self.assertEqual(info, {"name": "B", "status": "loaded"})
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_model_info_unloaded_status(self):
+        # the Orin's models-preset build with every slot empty: no name
+        # (a preset name in the empty state would read as loaded) and a
+        # definite status
+        body = json.dumps({"data": [
+            {"id": "Code-medium",
+             "status": {"value": "unloaded", "args": []}},
+            {"id": "General-medium",
+             "status": {"value": "unloaded", "args": []}},
+        ]}).encode()
+        srv, port = self._serve({"/v1/models": (200, body)})
+        try:
+            info = self.app_mod._llama_model_info("127.0.0.1", port)
+            self.assertEqual(info, {"name": None, "status": "unloaded"})
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_model_info_reached_list_no_props_fallback(self):
+        # a reachable /v1/models is authoritative — even an empty list
+        # means "no model loaded", not "try /props" (whose response on a
+        # router describes the router, not a model)
+        body = b'{"data": []}'
+        srv, port = self._serve({"/v1/models": (200, body),
+                                 "/props": (200,
+                                             b'{"name": "should-not-appear"}')})
+        try:
+            info = self.app_mod._llama_model_info("127.0.0.1", port)
+            self.assertEqual(info, {"name": None, "status": "unloaded"})
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_model_info_stock_build_no_status_field(self):
+        # stock llama.cpp: the listed model IS the loaded model
+        body = json.dumps({"data": [{"id": "fallback.gguf"}]}).encode()
+        srv, port = self._serve({"/v1/models": (200, body)})
+        try:
+            info = self.app_mod._llama_model_info("127.0.0.1", port)
+            self.assertEqual(info, {"name": "fallback.gguf", "status": None})
         finally:
             srv.shutdown()
             srv.server_close()

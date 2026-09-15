@@ -366,10 +366,16 @@ def _systemctl_active_mono_us(unit: str) -> Optional[int]:
 def _llama_model_info(host: str, port: int) -> Optional[Dict[str, Any]]:
     """Model name + slot status via the server's HTTP API.
 
-    /v1/models first — models-preset builds report the slot state in
-    ``status.value`` ("loaded" / "unloaded" / "loading") — /props as a
-    plain fallback (status unknown). None when unreachable (still
-    starting up, wrong port, …).
+    Router (models-preset) builds list EVERY preset from the ini on
+    /v1/models with a per-entry ``status.value`` ("loaded" / "loading" /
+    "unloaded") — the loaded model is the entry whose slot is live, not
+    the first entry in the list. Stock builds list the loaded model with
+    no status field. A reachable /v1/models is authoritative: an empty
+    slot is a definite {"name": None, "status": "unloaded"}, not a
+    reason to fall back to /props (which on a router reports the router,
+    not a model). /props is tried only when /v1/models gave no usable
+    answer (unreachable, or no "data" list); None then means unreachable
+    (starting up, wrong port, …).
     """
     import urllib.request  # noqa: PLC0415
     try:
@@ -377,14 +383,30 @@ def _llama_model_info(host: str, port: int) -> Optional[Dict[str, Any]]:
                 f"http://{host}:{port}/v1/models", timeout=1.5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         items = data.get("data") if isinstance(data, dict) else None
-        if items:
-            item = items[0] or {}
-            name = item.get("id") or item.get("name")
-            if name:
+        if items is not None:
+            picked: Optional[tuple] = None    # (item, status)
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
                 status = item.get("status")
                 status = status.get("value") if isinstance(status, dict) else status
-                return {"name": str(name),
-                        "status": str(status) if status is not None else None}
+                if status == "loaded":
+                    picked = (item, status)
+                    break
+                if picked is None and status == "loading":
+                    picked = (item, status)
+            if picked is None:
+                # stock builds list the loaded model without a status
+                for item in items:
+                    if isinstance(item, dict) and item.get("status") is None:
+                        picked = (item, None)
+                        break
+            if picked is not None:
+                item, status = picked
+                name = item.get("id") or item.get("name")
+                return {"name": str(name) if name else None,
+                        "status": str(status) if status else None}
+            return {"name": None, "status": "unloaded"}
     except Exception:
         pass
     try:

@@ -1084,9 +1084,8 @@
     var m = document.getElementById('llm-model');
     if (l.model) {
       if (l.model_status === 'unloaded') {
-        // preset builds report the preset name as the model id even when
-        // the slot is empty — showing it reads as "that model is loaded",
-        // so in the empty state we drop the name entirely
+        // kept for robustness — the backend only sends a name together
+        // with a loaded/loading entry
         m.textContent = 'no model loaded';
         m.className = 'llm-model loading';
       } else if (l.model_status === 'loading') {
@@ -1096,6 +1095,11 @@
         m.textContent = l.model;
         m.className = 'llm-model';
       }
+      m.style.display = '';
+    } else if (l.model_status === 'unloaded') {
+      // server reachable, but the slot is genuinely empty
+      m.textContent = 'no model loaded';
+      m.className = 'llm-model loading';
       m.style.display = '';
     } else if (l.model_configured && state === 'active') {
       m.textContent = 'loading\u2026';
