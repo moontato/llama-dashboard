@@ -29,9 +29,33 @@
       background: var(--bg);
       color: var(--text);
       padding: 1rem;
-      max-width: 500px;
-      margin: 0 auto;
       font-size: 14px;
+    }
+
+    /* ── Dashboard grid ───────────────────────────────────── */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0;
+    }
+    @media (min-width: 768px) {
+      .dashboard-grid {
+        grid-template-columns: 500px 1fr;
+        gap: 1.5rem;
+        margin: 0 auto;
+      }
+    }
+    .telemetry-column {
+      max-width: 500px;
+    }
+    .editor-column {
+      min-width: 0;
+      max-width: 500px;
+    }
+    @media (min-width: 768px) {
+      .editor-column {
+        max-width: none;
+      }
     }
 
     /* ── Banners ──────────────────────────────────────────── */
@@ -624,242 +648,260 @@
     </div>
   </div>
 
-  <!-- RAM -->
-  <div class="card s-ok" id="ram-card">
-    <div class="card-label">RAM</div>
-    <div class="ram-pct" id="ram-pct">&#8212;%</div>
-    <div class="ram-detail" id="ram-detail">&#8212; / &#8212; GiB</div>
-    <div class="bar-track">
-      <div class="bar-fill" id="ram-bar" style="width:0%"></div>
-    </div>
-    <canvas class="sparkline" id="ram-spark"></canvas>
-  </div>
+  <!-- Dashboard grid -->
+  <div class="dashboard-grid">
 
-  <!-- Swap (zram) -->
-  <div class="card" id="swap-card">
-    <div class="card-label">Swap &mdash; zram (memory pressure)</div>
-    <div class="swap-pct" id="swap-pct">&#8212;%</div>
-    <div class="ram-detail" id="swap-detail">&#8212; / &#8212; GiB</div>
-    <div class="bar-track">
-      <div class="bar-fill swap-fill" id="swap-bar" style="width:0%"></div>
-    </div>
-    <div class="shared-line">Shared / GPU model footprint: <b id="shared-val">&#8212;</b> GiB</div>
-  </div>
+    <!-- Left column: Telemetry -->
+    <div class="telemetry-column">
 
-  <!-- Tiles -->
-  <div class="tiles">
-    <div class="tile">
-      <div class="tile-label">GPU</div>
-      <span class="tile-value" id="gpu-val">&#8212;</span><span class="tile-unit">%</span>
-      <canvas class="sparkline" id="gpu-spark" style="height:22px"></canvas>
-    </div>
-    <div class="tile">
-      <div class="tile-label">Junction temp</div>
-      <span class="tile-value" id="temp-val">&#8212;</span><span class="tile-unit"> &deg;C</span>
-    </div>
-    <div class="tile">
-      <div class="tile-label">Total power</div>
-      <span class="tile-value" id="power-val">&#8212;</span><span class="tile-unit"> W</span>
-    </div>
-    <div class="tile">
-      <div class="tile-label">Fan</div>
-      <span class="tile-value" id="fan-val">&#8212;</span><span class="tile-unit">%</span>
-    </div>
-  </div>
-
-  <!-- CPU strip -->
-  <div class="card">
-    <div class="card-label" id="cpu-label">CPU</div>
-    <div id="cpu-strip"></div>
-  </div>
-
-  <!-- llama-server status -->
-  <div class="card" id="llm-card" style="display:none">
-    <div class="card-label">
-      <span class="llm-dot unknown" id="llm-dot"></span>
-      llama-server
-      <span id="llm-state">&mdash;</span>
-    </div>
-    <div class="llm-model" id="llm-model" style="display:none"></div>
-    <div class="llm-meta" id="llm-meta"></div>
-  </div>
-
-  <!-- Model disk usage -->
-  <div class="card disk-card" id="disk-card" style="display:none">
-    <div class="card-label" id="disk-label">Disk</div>
-    <div class="bar-track">
-      <div class="bar-fill" id="disk-bar" style="width:0%"></div>
-    </div>
-    <div class="disk-detail">
-      <span id="disk-detail">&mdash; / &mdash; GiB</span>
-      <b id="disk-pct">&mdash;%</b>
-    </div>
-  </div>
-
-  <!-- Models (models.ini editor) -->
-  <div id="models-readonly" class="banner"><span id="models-readonly-why"></span></div>
-  <details class="card advanced-card" id="models-card">
-    <summary class="card-label advanced-summary">models &middot; models.ini</summary>
-    <div class="advanced-body">
-    <div class="mi-filterbar">
-      <input id="mi-filter" class="mi-input" type="search"
-             placeholder="filter sections — name, region, model, param&hellip;"
-             autocomplete="off">
-      <span class="mi-filter-count" id="mi-filter-count"></span>
-    </div>
-    <div id="models-git-line" class="shared-line"></div>
-    <div id="models-table"></div>
-
-    <hr class="adv-divider">
-
-    <div class="adv-row" style="flex-direction:column; align-items:stretch;">
-      <input id="models-commit-msg" class="mi-input" placeholder="commit message" />
-      <div class="mini-actions" style="margin-top:0.4rem;">
-        <button id="models-commit-btn" class="mini-btn mi-primary" onclick="miCommit()">commit</button>
-        <button class="mini-btn" onclick="miGit('pull')">pull</button>
-        <button class="mini-btn" onclick="miGit('push')">push</button>
-        <a class="mini-btn" href="/api/models/backup">backup</a>
-        <button id="models-undo-btn" class="mini-btn mi-writable" onclick="miUndo()"
-                style="display:none;" title="restore the file to its state before the last edit">undo last edit</button>
-      </div>
-    </div>
-    <div id="models-git-status" class="restart-status"></div>
-
-    <hr class="adv-divider">
-
-    <details class="mi-disc">
-      <summary class="mi-sum">Add section</summary>
-      <div class="mi-add-body">
-        <label class="mi-field"><span>name</span><input id="mi-add-name" class="mi-input" placeholder="My-Model"></label>
-        <label class="mi-field"><span>region</span>
-          <select id="mi-add-region" class="mi-input">
-            <option value="models" selected>models</option>
-            <option value="profiles">profiles</option>
-          </select></label>
-        <div class="mi-field"><span>copy configuration from</span>
-          <div class="mi-copy-row">
-            <select id="mi-add-copy-from" class="mi-input mi-writable"></select>
-            <button class="mini-btn mi-writable" onclick="miAddCopyFrom()">copy</button>
-          </div></div>
-        <label class="mi-field"><span>model</span><input id="mi-add-model" class="mi-input" list="mi-dl-gguf" placeholder="/mnt/ssd/llamacpp_models/...gguf"></label>
-        <label class="mi-field"><span>params &mdash; one per line: key = value</span>
-          <textarea id="mi-add-params" class="mi-input" rows="3" placeholder="temp = 0.7&#10;ctx-size = 131072"></textarea></label>
-        <button class="mini-btn mi-primary mi-writable" onclick="miAdd()">add</button>
-        <div id="mi-add-status" class="restart-status"></div>
-      </div>
-    </details>
-
-    <details id="mi-editor" class="mi-disc">
-      <summary class="mi-sum">Edit section</summary>
-      <div class="mi-edit-body">
-        <input type="hidden" id="mi-name">
-        <label class="mi-field"><span>section name</span><input id="mi-newname" class="mi-input"></label>
-        <div class="mi-field"><span>copy configuration from</span>
-          <div class="mi-copy-row">
-            <select id="mi-copy-from" class="mi-input mi-writable"></select>
-            <button class="mini-btn mi-writable" onclick="miCopyFrom()">copy</button>
-          </div></div>
-        <label class="mi-field"><span>model</span><input id="mi-model" class="mi-input" list="mi-dl-gguf"></label>
-        <div class="mi-field"><span>params</span><div id="mi-params"></div>
-          <button class="mini-btn mi-writable" onclick="miAddParam('','')">+ param</button></div>
-        <div class="mini-actions">
-          <button class="mini-btn mi-primary mi-writable" onclick="miSaveEdit()">save</button>
-          <button class="mini-btn" onclick="miRevertEdit()">discard changes</button>
+      <!-- RAM -->
+      <div class="card s-ok" id="ram-card">
+        <div class="card-label">RAM</div>
+        <div class="ram-pct" id="ram-pct">&#8212;%</div>
+        <div class="ram-detail" id="ram-detail">&#8212; / &#8212; GiB</div>
+        <div class="bar-track">
+          <div class="bar-fill" id="ram-bar" style="width:0%"></div>
         </div>
-        <div id="mi-edit-status" class="restart-status"></div>
+        <canvas class="sparkline" id="ram-spark"></canvas>
       </div>
-    </details>
 
-    <div id="models-op-status" class="restart-status"></div>
-
-    <hr class="adv-divider">
-
-    <details id="mi-editor-raw" class="mi-disc">
-      <summary class="mi-sum">Raw editor</summary>
-      <div class="mi-add-body">
-        <div class="adv-row" style="gap:0.5rem; margin-bottom:0.4rem; justify-content: flex-start;">
-          <button class="mini-btn mi-writable" onclick="miRawLoad()">load</button>
-          <button class="mini-btn mi-primary mi-writable" onclick="miRawSave()">save</button>
-          <span id="mi-raw-status" class="restart-status"></span>
+      <!-- Swap (zram) -->
+      <div class="card" id="swap-card">
+        <div class="card-label">Swap &mdash; zram (memory pressure)</div>
+        <div class="swap-pct" id="swap-pct">&#8212;%</div>
+        <div class="ram-detail" id="swap-detail">&#8212; / &#8212; GiB</div>
+        <div class="bar-track">
+          <div class="bar-fill swap-fill" id="swap-bar" style="width:0%"></div>
         </div>
-        <div class="mi-raw-wrap">
-          <div id="mi-raw-gutter" class="mi-raw-gutter" aria-hidden="true"></div>
-          <div class="mi-raw-stack">
-            <pre id="mi-raw-hl" class="mi-raw-hl" aria-hidden="true"></pre>
-            <textarea id="mi-raw-text" class="mi-raw-textarea mi-writable"
-                      spellcheck="false" autocomplete="off"></textarea>
+        <div class="shared-line">Shared / GPU model footprint: <b id="shared-val">&#8212;</b> GiB</div>
+      </div>
+
+      <!-- Tiles -->
+      <div class="tiles">
+        <div class="tile">
+          <div class="tile-label">GPU</div>
+          <span class="tile-value" id="gpu-val">&#8212;</span><span class="tile-unit">%</span>
+          <canvas class="sparkline" id="gpu-spark" style="height:22px"></canvas>
+        </div>
+        <div class="tile">
+          <div class="tile-label">Junction temp</div>
+          <span class="tile-value" id="temp-val">&#8212;</span><span class="tile-unit"> &deg;C</span>
+        </div>
+        <div class="tile">
+          <div class="tile-label">Total power</div>
+          <span class="tile-value" id="power-val">&#8212;</span><span class="tile-unit"> W</span>
+        </div>
+        <div class="tile">
+          <div class="tile-label">Fan</div>
+          <span class="tile-value" id="fan-val">&#8212;</span><span class="tile-unit">%</span>
+        </div>
+      </div>
+
+      <!-- CPU strip -->
+      <div class="card">
+        <div class="card-label" id="cpu-label">CPU</div>
+        <div id="cpu-strip"></div>
+      </div>
+
+      <!-- llama-server status -->
+      <div class="card" id="llm-card" style="display:none">
+        <div class="card-label">
+          <span class="llm-dot unknown" id="llm-dot"></span>
+          llama-server
+          <span id="llm-state">&mdash;</span>
+        </div>
+        <div class="llm-model" id="llm-model" style="display:none"></div>
+        <div class="llm-meta" id="llm-meta"></div>
+      </div>
+
+      <!-- Model disk usage -->
+      <div class="card disk-card" id="disk-card" style="display:none">
+        <div class="card-label" id="disk-label">Disk</div>
+        <div class="bar-track">
+          <div class="bar-fill" id="disk-bar" style="width:0%"></div>
+        </div>
+        <div class="disk-detail">
+          <span id="disk-detail">&mdash; / &mdash; GiB</span>
+          <b id="disk-pct">&mdash;%</b>
+        </div>
+      </div>
+
+      <!-- Advanced controls -->
+      <details class="card advanced-card">
+        <summary class="card-label advanced-summary">Advanced controls</summary>
+        <div class="advanced-body">
+          <div class="adv-row">
+            <div>
+              <div class="adv-svc-name">llama-server.service</div>
+              <div class="adv-svc-hint">systemd unit &mdash; restarts may interrupt inference</div>
+            </div>
+            <button id="restart-btn" class="restart-btn" onclick="restartLlama()">Restart</button>
+          </div>
+          <div id="restart-status" class="restart-status"></div>
+
+          <hr class="adv-divider">
+
+          <div class="log-header">
+            <div class="log-title">llama-server logs</div>
+            <div class="log-actions">
+              <button class="log-btn" id="log-toggle-btn" onclick="logToggle()">▶ Logs</button>
+            </div>
+          </div>
+          <div id="log-dialog">
+            <div class="log-status">
+              <span class="log-dot stopped" id="log-dot"></span>
+              <span id="log-status-text">stopped</span>
+            </div>
+            <div class="log-actions" style="margin-top:0.3rem;">
+              <button class="log-btn" onclick="logStop()" id="log-stop-btn" disabled>Stop</button>
+              <button class="log-btn danger" onclick="logClear()" id="log-clear-btn" disabled>Clear</button>
+              <button class="log-btn" onclick="logPauseToggle()" id="log-pause-btn" disabled
+                      title="sticky pause — freezes auto-scroll until resumed">Pause</button>
+              <select id="log-tail" class="log-select" onchange="logTailChange()"
+                      title="initial tail length" disabled>
+                <option value="100">100 lines</option>
+                <option value="500" selected>500 lines</option>
+                <option value="2000">2000 lines</option>
+              </select>
+            </div>
+            <div class="log-search">
+              <input id="log-search" class="log-search-input" type="search"
+                     placeholder="search buffer — Enter next, Shift+Enter prev" disabled>
+              <button class="log-btn" id="log-search-prev" onclick="logSearchStep(-1)"
+                      title="previous match" disabled>&#9650;</button>
+              <button class="log-btn" id="log-search-next" onclick="logSearchStep(1)"
+                      title="next match" disabled>&#9660;</button>
+              <span id="log-search-count" class="log-search-count"></span>
+            </div>
+            <div id="log-viewer"></div>
           </div>
         </div>
-      </div>
-    </details>
+      </details>
 
-    <div id="mi-diff-modal" class="mi-diff-modal">
-      <div class="mi-diff-box">
-        <div class="mi-diff-head">
-          <span>save these changes?</span>
-          <span id="mi-diff-meta" class="mi-diff-meta"></span>
-        </div>
-        <pre id="mi-diff-pre" class="mi-diff-pre"></pre>
-        <div class="mi-diff-actions">
-          <button id="mi-diff-apply" class="mini-btn mi-primary">apply</button>
-          <button id="mi-diff-cancel" class="mini-btn">cancel</button>
-        </div>
-      </div>
     </div>
+    <!-- /telemetry-column -->
+
+    <!-- Right column: Editor -->
+    <div class="editor-column">
+
+      <!-- Models (models.ini editor) -->
+      <div id="models-readonly" class="banner"><span id="models-readonly-why"></span></div>
+      <details class="card advanced-card" id="models-card">
+        <summary class="card-label advanced-summary">models &middot; models.ini</summary>
+        <div class="advanced-body">
+        <div class="mi-filterbar">
+          <input id="mi-filter" class="mi-input" type="search"
+                 placeholder="filter sections — name, region, model, param&hellip;"
+                 autocomplete="off">
+          <span class="mi-filter-count" id="mi-filter-count"></span>
+        </div>
+        <div id="models-git-line" class="shared-line"></div>
+        <div id="models-table"></div>
+
+        <hr class="adv-divider">
+
+        <div class="adv-row" style="flex-direction:column; align-items:stretch;">
+          <input id="models-commit-msg" class="mi-input" placeholder="commit message" />
+          <div class="mini-actions" style="margin-top:0.4rem;">
+            <button id="models-commit-btn" class="mini-btn mi-primary" onclick="miCommit()">commit</button>
+            <button class="mini-btn" onclick="miGit('pull')">pull</button>
+            <button class="mini-btn" onclick="miGit('push')">push</button>
+            <a class="mini-btn" href="/api/models/backup">backup</a>
+            <button id="models-undo-btn" class="mini-btn mi-writable" onclick="miUndo()"
+                    style="display:none;" title="restore the file to its state before the last edit">undo last edit</button>
+          </div>
+        </div>
+        <div id="models-git-status" class="restart-status"></div>
+
+        <hr class="adv-divider">
+
+        <details class="mi-disc">
+          <summary class="mi-sum">Add section</summary>
+          <div class="mi-add-body">
+            <label class="mi-field"><span>name</span><input id="mi-add-name" class="mi-input" placeholder="My-Model"></label>
+            <label class="mi-field"><span>region</span>
+              <select id="mi-add-region" class="mi-input">
+                <option value="models" selected>models</option>
+                <option value="profiles">profiles</option>
+              </select></label>
+            <div class="mi-field"><span>copy configuration from</span>
+              <div class="mi-copy-row">
+                <select id="mi-add-copy-from" class="mi-input mi-writable"></select>
+                <button class="mini-btn mi-writable" onclick="miAddCopyFrom()">copy</button>
+              </div></div>
+            <label class="mi-field"><span>model</span><input id="mi-add-model" class="mi-input" list="mi-dl-gguf" placeholder="/mnt/ssd/llamacpp_models/...gguf"></label>
+            <label class="mi-field"><span>params &mdash; one per line: key = value</span>
+              <textarea id="mi-add-params" class="mi-input" rows="3" placeholder="temp = 0.7&#10;ctx-size = 131072"></textarea></label>
+            <button class="mini-btn mi-primary mi-writable" onclick="miAdd()">add</button>
+            <div id="mi-add-status" class="restart-status"></div>
+          </div>
+        </details>
+
+        <details id="mi-editor" class="mi-disc">
+          <summary class="mi-sum">Edit section</summary>
+          <div class="mi-edit-body">
+            <input type="hidden" id="mi-name">
+            <label class="mi-field"><span>section name</span><input id="mi-newname" class="mi-input"></label>
+            <div class="mi-field"><span>copy configuration from</span>
+              <div class="mi-copy-row">
+                <select id="mi-copy-from" class="mi-input mi-writable"></select>
+                <button class="mini-btn mi-writable" onclick="miCopyFrom()">copy</button>
+              </div></div>
+            <label class="mi-field"><span>model</span><input id="mi-model" class="mi-input" list="mi-dl-gguf"></label>
+            <div class="mi-field"><span>params</span><div id="mi-params"></div>
+              <button class="mini-btn mi-writable" onclick="miAddParam('','')">+ param</button></div>
+            <div class="mini-actions">
+              <button class="mini-btn mi-primary mi-writable" onclick="miSaveEdit()">save</button>
+              <button class="mini-btn" onclick="miRevertEdit()">discard changes</button>
+            </div>
+            <div id="mi-edit-status" class="restart-status"></div>
+          </div>
+        </details>
+
+        <div id="models-op-status" class="restart-status"></div>
+
+        <hr class="adv-divider">
+
+        <details id="mi-editor-raw" class="mi-disc">
+          <summary class="mi-sum">Raw editor</summary>
+          <div class="mi-add-body">
+            <div class="adv-row" style="gap:0.5rem; margin-bottom:0.4rem; justify-content: flex-start;">
+              <button class="mini-btn mi-writable" onclick="miRawLoad()">load</button>
+              <button class="mini-btn mi-primary mi-writable" onclick="miRawSave()">save</button>
+              <span id="mi-raw-status" class="restart-status"></span>
+            </div>
+            <div class="mi-raw-wrap">
+              <div id="mi-raw-gutter" class="mi-raw-gutter" aria-hidden="true"></div>
+              <div class="mi-raw-stack">
+                <pre id="mi-raw-hl" class="mi-raw-hl" aria-hidden="true"></pre>
+                <textarea id="mi-raw-text" class="mi-raw-textarea mi-writable"
+                          spellcheck="false" autocomplete="off"></textarea>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <div id="mi-diff-modal" class="mi-diff-modal">
+          <div class="mi-diff-box">
+            <div class="mi-diff-head">
+              <span>save these changes?</span>
+              <span id="mi-diff-meta" class="mi-diff-meta"></span>
+            </div>
+            <pre id="mi-diff-pre" class="mi-diff-pre"></pre>
+            <div class="mi-diff-actions">
+              <button id="mi-diff-apply" class="mini-btn mi-primary">apply</button>
+              <button id="mi-diff-cancel" class="mini-btn">cancel</button>
+            </div>
+          </div>
+        </div>
+        </div>
+      </details>
+
     </div>
-  </details>
+    <!-- /editor-column -->
 
-  <!-- Advanced controls -->
-  <details class="card advanced-card">
-    <summary class="card-label advanced-summary">Advanced controls</summary>
-    <div class="advanced-body">
-      <div class="adv-row">
-        <div>
-          <div class="adv-svc-name">llama-server.service</div>
-          <div class="adv-svc-hint">systemd unit &mdash; restarts may interrupt inference</div>
-        </div>
-        <button id="restart-btn" class="restart-btn" onclick="restartLlama()">Restart</button>
-      </div>
-      <div id="restart-status" class="restart-status"></div>
-
-      <hr class="adv-divider">
-
-      <div class="log-header">
-        <div class="log-title">llama-server logs</div>
-        <div class="log-actions">
-          <button class="log-btn" id="log-toggle-btn" onclick="logToggle()">▶ Logs</button>
-        </div>
-      </div>
-      <div id="log-dialog">
-        <div class="log-status">
-          <span class="log-dot stopped" id="log-dot"></span>
-          <span id="log-status-text">stopped</span>
-        </div>
-        <div class="log-actions" style="margin-top:0.3rem;">
-          <button class="log-btn" onclick="logStop()" id="log-stop-btn" disabled>Stop</button>
-          <button class="log-btn danger" onclick="logClear()" id="log-clear-btn" disabled>Clear</button>
-          <button class="log-btn" onclick="logPauseToggle()" id="log-pause-btn" disabled
-                  title="sticky pause — freezes auto-scroll until resumed">Pause</button>
-          <select id="log-tail" class="log-select" onchange="logTailChange()"
-                  title="initial tail length" disabled>
-            <option value="100">100 lines</option>
-            <option value="500" selected>500 lines</option>
-            <option value="2000">2000 lines</option>
-          </select>
-        </div>
-        <div class="log-search">
-          <input id="log-search" class="log-search-input" type="search"
-                 placeholder="search buffer — Enter next, Shift+Enter prev" disabled>
-          <button class="log-btn" id="log-search-prev" onclick="logSearchStep(-1)"
-                  title="previous match" disabled>&#9650;</button>
-          <button class="log-btn" id="log-search-next" onclick="logSearchStep(1)"
-                  title="next match" disabled>&#9660;</button>
-          <span id="log-search-count" class="log-search-count"></span>
-        </div>
-        <div id="log-viewer"></div>
-      </div>
-    </div>
-  </details>
+  </div>
+  <!-- /dashboard-grid -->
 
   <div class="footer" id="footer-ts">Last update: &mdash;</div>
 
