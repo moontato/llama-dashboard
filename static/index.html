@@ -35,14 +35,16 @@
     /* ── Dashboard grid ───────────────────────────────────── */
     .dashboard-grid {
       display: grid;
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
+      max-width: 500px;
+      margin: 0 auto;
       gap: 0;
     }
     @media (min-width: 768px) {
       .dashboard-grid {
         grid-template-columns: 500px 1fr;
+        max-width: none;
         gap: 1.5rem;
-        margin: 0 auto;
       }
     }
     .telemetry-column {
