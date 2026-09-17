@@ -40,7 +40,8 @@
       margin: 0 auto;
       gap: 0;
     }
-    @media (min-width: 768px) {
+    /* Two 500px columns, a 1.5rem gap, and 1rem body padding per side. */
+    @media (min-width: calc(1000px + 3.5rem)) {
       .dashboard-grid {
         grid-template-columns: 500px 1fr;
         max-width: none;
@@ -54,7 +55,7 @@
       min-width: 0;
       max-width: 500px;
     }
-    @media (min-width: 768px) {
+    @media (min-width: calc(1000px + 3.5rem)) {
       .editor-column {
         max-width: none;
       }
