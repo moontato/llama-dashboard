@@ -55,7 +55,7 @@ let captured;
 context.miData = { revision: 'current' };
 context.fetch = (url, options) => {
   captured = options;
-  return Promise.resolve({ json: () => ({ ok: true }) });
+  return Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: true }) });
 };
 loadFunction('miPost', context);
 context.miPost('/api/models/undo', {});

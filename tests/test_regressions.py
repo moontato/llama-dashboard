@@ -114,6 +114,19 @@ class ApiRegressionTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 409)
                 self.assertEqual(self.path.read_text(), '[a]\nx = 2\n')
 
+    def test_section_save_returns_new_revision(self):
+        for value in ('2', '2'):  # changed save followed by no-op
+            response = self.client.post('/api/models/section/edit',
+                                        json={'name': 'a', 'set': {'x': value}})
+            self.assertEqual(response.get_json()['revision'], app._revision(self.path.read_text()))
+
+    def test_raw_diff_reports_newline_only_changes(self):
+        response = self.client.post('/api/models/raw/diff', json={'text': '[a]\nx = 1'})
+        data = response.get_json()
+        self.assertTrue(data['changed'])
+        self.assertTrue(data['diff'])
+        self.assertEqual(data['revision'], app._revision(self.path.read_text()))
+
     def test_raw_save_returns_new_revision(self):
         response = self.client.post('/api/models/raw', json={'text': '[a]\nx = 3\n'})
         self.assertEqual(response.get_json()['revision'], app._revision(self.path.read_text()))

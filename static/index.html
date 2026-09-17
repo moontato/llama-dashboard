@@ -476,6 +476,12 @@
     .mi-filter-count { font-size: 0.68rem; color: var(--muted); white-space: nowrap; }
     .mi-row.mi-hidden, .mi-region-wrap.mi-all-hidden { display: none; }
 
+    .mi-editor-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+    .mi-save-state { display: block; font-size: 0.8rem; color: var(--muted); margin: 0.4rem 0; }
+    .mi-save-state.mi-dirty { color: var(--warn); }
+    .mi-conflict { border: 1px solid var(--warn); border-radius: 6px; padding: 0.6rem; margin: 0.5rem 0; }
+    .mi-conflict p { margin: 0 0 0.5rem; }
+
     /* ── Raw save: diff preview modal ──────────────── */
     .mi-diff-modal {
       position: fixed; inset: 0; background: rgba(0,0,0,0.55);
@@ -840,6 +846,13 @@
         <details id="mi-editor" class="mi-disc">
           <summary class="mi-sum">Edit section</summary>
           <div class="mi-edit-body">
+            <span id="mi-edit-state" class="mi-save-state" role="status" aria-live="polite">Not loaded</span>
+            <div id="mi-edit-conflict" class="mi-conflict" hidden>
+              <p>The file changed elsewhere. Your draft is safe. Compare, or reload to discard it.</p>
+              <button class="mini-btn" onclick="miCompareLatest('edit')">Compare with latest</button>
+              <button class="mini-btn" onclick="miReloadEdit()">Reload latest</button>
+            </div>
+            <fieldset id="mi-edit-fields" class="mi-editor-fields">
             <input type="hidden" id="mi-name">
             <label class="mi-field"><span>section name</span><input id="mi-newname" class="mi-input"></label>
             <div class="mi-field"><span>copy configuration from</span>
@@ -851,10 +864,11 @@
             <div class="mi-field"><span>params</span><div id="mi-params"></div>
               <button class="mini-btn mi-writable" onclick="miAddParam('','')">+ param</button></div>
             <div class="mini-actions">
-              <button class="mini-btn mi-primary mi-writable" onclick="miSaveEdit()">save</button>
+              <button id="mi-edit-save" class="mini-btn mi-primary mi-writable" onclick="miSaveEdit()" disabled>Save changes</button>
               <button class="mini-btn" onclick="miRevertEdit()">discard changes</button>
             </div>
-            <div id="mi-edit-status" class="restart-status"></div>
+            </fieldset>
+            <div id="mi-edit-status" class="restart-status" role="status" aria-live="polite"></div>
           </div>
         </details>
 
@@ -865,10 +879,17 @@
         <details id="mi-editor-raw" class="mi-disc">
           <summary class="mi-sum">Raw editor</summary>
           <div class="mi-add-body">
+            <span id="mi-raw-state" class="mi-save-state" role="status" aria-live="polite">Not loaded</span>
+            <div id="mi-raw-conflict" class="mi-conflict" hidden>
+              <p>The file changed elsewhere. Your draft is safe. Compare, or reload to discard it.</p>
+              <button class="mini-btn" onclick="miCompareLatest('raw')">Compare with latest</button>
+              <button class="mini-btn" onclick="miRawLoad()">Reload latest</button>
+            </div>
+            <fieldset id="mi-raw-fields" class="mi-editor-fields">
             <div class="adv-row" style="gap:0.5rem; margin-bottom:0.4rem; justify-content: flex-start;">
-              <button class="mini-btn mi-writable" onclick="miRawLoad()">load</button>
-              <button class="mini-btn mi-primary mi-writable" onclick="miRawSave()">save</button>
-              <span id="mi-raw-status" class="restart-status"></span>
+              <button class="mini-btn" onclick="miRawLoad()">Reload</button>
+              <button id="mi-raw-save" class="mini-btn mi-primary mi-writable" onclick="miRawSave()" disabled>Review &amp; save</button>
+              <span id="mi-raw-status" class="restart-status" role="status" aria-live="polite"></span>
             </div>
             <div class="mi-raw-wrap">
               <div id="mi-raw-gutter" class="mi-raw-gutter" aria-hidden="true"></div>
@@ -878,13 +899,14 @@
                           spellcheck="false" autocomplete="off"></textarea>
               </div>
             </div>
+            </fieldset>
           </div>
         </details>
 
-        <div id="mi-diff-modal" class="mi-diff-modal">
+        <div id="mi-diff-modal" class="mi-diff-modal" role="dialog" aria-modal="true" aria-labelledby="mi-diff-title">
           <div class="mi-diff-box">
             <div class="mi-diff-head">
-              <span>save these changes?</span>
+              <span id="mi-diff-title">Save these changes?</span>
               <span id="mi-diff-meta" class="mi-diff-meta"></span>
             </div>
             <pre id="mi-diff-pre" class="mi-diff-pre"></pre>
@@ -905,6 +927,7 @@
 
   <div class="footer" id="footer-ts">Last update: &mdash;</div>
 
+<script src="/static/editor-state.js"></script>
 <script>
 (function () {
   'use strict';
@@ -1496,8 +1519,10 @@ function miRawLiveCheck() {
   clearTimeout(miRawCheckTimer);
   miRawCheckTimer = setTimeout(function () {
     var text = miEl('mi-raw-text').value;
+    if (miEditorState.raw.busy || miEditorState.raw.conflict) return;
     if (!text.trim()) { miRawStatus('empty', true); return; }
     miPost('/api/models/raw/check', { text: text }).then(function (d) {
+      if (miEditorState.raw.busy || miEditorState.raw.conflict || miEl('mi-raw-text').value !== text) return;
       if (d.ok) miRawStatus('\u2713 ' + d.sections + ' sections', true);
       else miRawStatus(d.error, false);
     }).catch(function () { /* network: keep last status */ });
@@ -1529,7 +1554,9 @@ function miPost(url, body, revision) {
     method: 'POST',
     headers: headers,
     body: JSON.stringify(body || {}),
-  }).then(function (r) { return r.json(); });
+  }).then(function (r) {
+    return r.json().then(function (data) { data.httpStatus = r.status; return data; });
+  });
 }
 
 function miEl(id) { return document.getElementById(id); }
@@ -1918,6 +1945,7 @@ function miRender(d) {
   miEl('models-undo-btn').style.display = (d.git && d.git.dirty) ? '' : 'none';
 
   miApplyFilter();
+  miUpdateEditorState();
 }
 
 function miLoad() {
@@ -2033,7 +2061,10 @@ function miClearParamDrops() {
 function miWireParamDrag(row) {
   var box = miEl('mi-params');
   var grip = row.querySelector('.mi-grip');
-  grip.addEventListener('mousedown', function () { row.draggable = true; });
+  row.addEventListener('dragstart', function (e) {
+    if (miEditorState.edit.busy) { e.preventDefault(); e.stopImmediatePropagation(); }
+  });
+  grip.addEventListener('mousedown', function () { row.draggable = !miEditorState.edit.busy; });
   grip.addEventListener('mouseup',   function () { row.draggable = false; });
   row.addEventListener('dragstart', function (e) {
     if (row.draggable !== true) return;
@@ -2062,6 +2093,7 @@ function miWireParamDrag(row) {
     row.classList.remove('drop-before', 'drop-after');
   });
   row.addEventListener('drop', function (e) {
+    if (miEditorState.edit.busy) return;
     var dragging = box.querySelector('.mi-dragging');
     if (!dragging || dragging === row) return;
     e.preventDefault();
@@ -2090,6 +2122,7 @@ function miStepParam(row, dir) {
 }
 
 function miRefreshParamSteps() {
+  miUpdateEditorState();
   var rows = Array.prototype.slice.call(
     miEl('mi-params').querySelectorAll('.mi-param'));
   rows.forEach(function (row, i) {
@@ -2151,20 +2184,20 @@ function miCopyFrom() {
 }
 
 function miRevertEdit() {
-  if (!miOriginal) return;
+  if (!miOriginal || !miMayDiscard('edit')) return;
   miEl('mi-newname').value = miEl('mi-name').value.trim();
   miEl('mi-model').value = miOriginal.model || '';
   var box = miEl('mi-params');
   box.innerHTML = '';
-  Object.keys(miOriginal).forEach(function (k) {
-    if (k === 'model') return;
+  miOriginalOrder.forEach(function (k) {
     box.appendChild(miParamRow(k, miOriginal[k]));
   });
   miRefreshParamSteps();
   miOpStatus('mi-edit-status', 'changes discarded', true);
 }
 
-function miEdit(i) {
+function miEdit(i, reloading) {
+  if (!reloading && !miMayDiscard('edit')) return;
   miLoadFiles();                       // keep the pickers fresh
   var s = miData.models[i];
   miEditArchived = !!s.archived;
@@ -2184,6 +2217,7 @@ function miEdit(i) {
   });
   miBuildCopySelect(i);
   miRefreshParamSteps();
+  miAcceptDraft('edit');
   miOpStatus('mi-edit-status', '', true);
   var ed = miEl('mi-editor');
   ed.open = true;
@@ -2220,6 +2254,7 @@ function miEditSummary() {
 }
 
 function miSaveEdit() {
+  if (miEditorState.edit.busy || miEditorState.edit.conflict) return;
   var name = miEl('mi-name').value.trim();
   var set = {};
   var key_order = [];
@@ -2248,13 +2283,25 @@ function miSaveEdit() {
     return;
   }
   if (!confirm('[' + name + ']\n  ' + bits.join('\n  ') + '\n\nsave?')) return;
+  miSetBusy('edit', true);
   miOpStatus('mi-edit-status', 'saving…', true);
   miPost('/api/models/section/edit', body, miEditRevision).then(function (d) {
     miOpStatus('mi-edit-status', d.ok ? 'saved' : d.error, !!d.ok);
-    if (d.ok) { miEl('mi-editor').open = false; miLoad(); }
+    if (d.ok) {
+      miEditRevision = d.revision;
+      miEl('mi-name').value = miEl('mi-newname').value.trim() || name;
+      miEl('mi-newname').value = miEl('mi-name').value;
+      miOriginal = { model: miEl('mi-model').value.trim() };
+      miOriginalOrder = [];
+      miEditDraft().params.forEach(function (pair) {
+        if (pair[0]) { miOriginal[pair[0]] = pair[1]; miOriginalOrder.push(pair[0]); }
+      });
+      miAcceptDraft('edit'); miEl('mi-editor').open = false; miLoad();
+    }
+    else miSaveConflict('edit', d);
   }).catch(function () {
-    miOpStatus('mi-edit-status', 'network error', false);
-  });
+    miOpStatus('mi-edit-status', 'Network error — draft preserved', false);
+  }).finally(function () { miSetBusy('edit', false); });
 }
 
 function miAddCopyFrom() {
@@ -2307,54 +2354,71 @@ function miAdd() {
 }
 
 function miRawLoad() {
-  fetch('/api/models')
+  if (!miMayDiscard('raw')) return;
+  miSetBusy('raw', true);
+  return fetch('/api/models')
     .then(function (r) { return r.json(); })
     .then(function (d) {
       if (d.ok && d.raw !== undefined) {
         miRawRevision = d.revision;
         miEl('mi-raw-text').value = d.raw;
+        miAcceptDraft('raw');
+        miRawStatus('Loaded latest file', true);
         miRawSync();
         miRawLiveCheck();
       } else {
-        miEl('mi-raw-text').value = '';
-        miRawSync();
-        miRawStatus('load failed', false);
+        miRawStatus('Load failed — draft preserved', false);
       }
     })
     .catch(function () {
-      miRawStatus('network error', false);
-    });
+      miRawStatus('Network error — draft preserved', false);
+    }).finally(function () { miSetBusy('raw', false); });
 }
 
 var miDiffApplyFn = null;
+var miDiffCloseFn = null;
+var miDiffPreviousFocus = null;
 
 function miRawSave() {
+  if (miEditorState.raw.busy || miEditorState.raw.conflict) return;
+  miSetBusy('raw', true);
   var text = miEl('mi-raw-text').value;
   var revision = miRawRevision;
   // parse-check + preview before anything is written (#6)
   miRawStatus('checking\u2026', true);
   miPost('/api/models/raw/diff', { text: text }).then(function (d) {
-    if (!d.ok) { miRawStatus(d.error || 'invalid', false); return; }
-    if (!d.changed) { miRawStatus('no changes', true); return; }
+    if (!d.ok) { miRawStatus(d.error || 'invalid', false); miSetBusy('raw', false); return; }
+    if (!d.changed) {
+      miRawRevision = d.revision;
+      miAcceptDraft('raw');
+      miRawStatus('Already matches the saved file', true);
+      miSetBusy('raw', false);
+      return;
+    }
     miShowDiff(d.diff, d.sections, function () {
+      miSetBusy('raw', true);
       miRawStatus('saving\u2026', true);
       miPost('/api/models/raw', { text: text }, revision).then(function (r) {
         if (r.ok) {
           miRawRevision = r.revision;
+          miAcceptDraft('raw');
           miRawStatus('saved', true);
           miLoad();
         }
-        else miRawStatus(r.error || 'save failed', false);
+        else { miRawStatus(r.error || 'save failed', false); miSaveConflict('raw', r); }
       }).catch(function () {
-        miRawStatus('network error', false);
-      });
-    });
+        miRawStatus('Network error — draft preserved', false);
+      }).finally(function () { miSetBusy('raw', false); });
+    }, function () { miSetBusy('raw', false); });
   }).catch(function () {
-    miRawStatus('network error', false);
+    miRawStatus('Network error — draft preserved', false);
+    miSetBusy('raw', false);
   });
 }
 
-function miShowDiff(diff, sections, onApply) {
+function miShowDiff(diff, sections, onApply, onClose) {
+  if (miEl('mi-diff-modal').classList.contains('open')) miCloseDiff();
+  miDiffPreviousFocus = document.activeElement;
   var pre = miEl('mi-diff-pre');
   pre.innerHTML = '';
   diff.forEach(function (line) {
@@ -2364,14 +2428,23 @@ function miShowDiff(diff, sections, onApply) {
     div.textContent = line === '' ? ' ' : line;
     pre.appendChild(div);
   });
-  miEl('mi-diff-meta').textContent = 'parses to ' + sections + ' sections';
+  miEl('mi-diff-title').textContent = onApply ? 'Save these changes?' : 'Compare with latest — draft preserved';
+  miEl('mi-diff-meta').textContent = onApply ? 'parses to ' + sections + ' sections' : 'Read-only comparison. Close to keep editing, or reload to discard your draft.';
+  miEl('mi-diff-apply').hidden = !onApply;
+  miEl('mi-diff-cancel').textContent = onApply ? 'Cancel' : 'Close';
   miDiffApplyFn = onApply;
+  miDiffCloseFn = onClose || null;
   miEl('mi-diff-modal').classList.add('open');
+  miEl('mi-diff-cancel').focus();
 }
 
 function miCloseDiff() {
   miEl('mi-diff-modal').classList.remove('open');
   miDiffApplyFn = null;
+  var close = miDiffCloseFn;
+  miDiffCloseFn = null;
+  if (close) close();
+  if (miDiffPreviousFocus && miDiffPreviousFocus.isConnected) miDiffPreviousFocus.focus();
 }
 
 function miRawStatus(msg, ok) {
@@ -2399,7 +2472,7 @@ document.addEventListener('keydown', function (e) {
   var rawEditor = miEl('mi-editor-raw');
   if (!rawEditor) return;
   rawEditor.addEventListener('toggle', function () {
-    if (rawEditor.open) {
+    if (rawEditor.open && miEditorState.raw.baseline === null) {
       miRawLoad();
     }
   });
@@ -2416,8 +2489,15 @@ document.addEventListener('keydown', function (e) {
     if (e.target === this) miCloseDiff();
   });
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && miEl('mi-diff-modal').classList.contains('open'))
-      miCloseDiff();
+    if (!miEl('mi-diff-modal').classList.contains('open')) return;
+    if (e.key === 'Escape') miCloseDiff();
+    if (e.key === 'Tab') {
+      var buttons = Array.from(miEl('mi-diff-modal').querySelectorAll('button'))
+        .filter(function (button) { return !button.hidden && !button.disabled; });
+      var first = buttons[0], last = buttons[buttons.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
   });
 
   // section filter (#1)

@@ -746,10 +746,10 @@ def _mutate(fn):
             fn(doc)
             new_text = doc.render()
             if new_text == _text:
-                return jsonify({"ok": True}), 200
+                return jsonify({"ok": True, "revision": _revision(new_text)}), 200
             _write_text(new_text)
             _last_raw["text"] = _text
-            return jsonify({"ok": True}), 200
+            return jsonify({"ok": True, "revision": _revision(new_text)}), 200
         except ModelsIniError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         except Exception as exc:
@@ -997,8 +997,12 @@ def api_models_raw_diff() -> Response:
         current.splitlines(), proposed.splitlines(),
         fromfile="models.ini (current)", tofile="models.ini (proposed)",
         lineterm=""))
+    changed = proposed != current
+    if changed and not diff:
+        diff = ["Line endings or the final newline differ."]
     return jsonify({"ok": True, "sections": len(doc.blocks),
-                    "changed": bool(diff), "diff": diff})
+                    "revision": _revision(current),
+                    "changed": changed, "diff": diff})
 
 
 @app.route("/api/models/backup", methods=["GET"])

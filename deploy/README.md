@@ -239,6 +239,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m unittest discover -s tests -v
 node tests/test_frontend.cjs
+node tests/test_editor_state.cjs
 ```
 
 The Node checks exercise frontend functions with a small DOM stub; they are not
