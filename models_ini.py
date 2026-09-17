@@ -478,7 +478,15 @@ class Document:
         if i >= 0:
             b.body[i] = prefix + f"{key} = {value}{_eol(b.body[i])}"
         else:
-            b.body.append(prefix + f"{key} = {value}\n")
+            # A valid INI need not end in a newline. Separate the new key
+            # from the previous key (or an otherwise empty section header).
+            eol = next((_eol(line) for line in [b.header] + b.body
+                        if _eol(line)), "\n")
+            if b.body and not _eol(b.body[-1]):
+                b.body[-1] += eol
+            elif not b.body and not _eol(b.header):
+                b.header += eol
+            b.body.append(prefix + f"{key} = {value}{eol}")
 
     def remove_key(self, name: str, key: str, archived: bool = False) -> None:
         b = self.block(name, archived)
@@ -584,6 +592,18 @@ def parse(text: str) -> Document:
                 cur.settled = True
                 pending.append(raw)
             continue
+        # A blank line does not end an INI section. If a key follows it,
+        # reclaim the pending separator/comments into this section. Region
+        # markers remain boundaries, even before the next section header.
+        key_core = _uncomment(raw).strip() if cur and cur.archived else core
+        if (cur is not None and cur.settled and _KEY_RE.match(key_core)
+                and not any(_MARKER_RE.match(line.strip()) for line in pending)):
+            cur.body.extend(pending)
+            pending = []
+            cur.body.append(raw)
+            cur.settled = False
+            continue
+
         # Comment or key line: body until the block settles (first blank
         # line / marker), then leading of the next block, then header.
         if core[0] in "#;":

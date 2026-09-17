@@ -96,6 +96,21 @@ llama-dashboard ALL=(ALL) NOPASSWD: /bin/systemctl restart llama-server.service
 This allows restarting only that service. (All git operations use the
 deploy-key setup below — no sudo for git.)
 
+### Grant log-viewer permission
+
+The log viewer runs noninteractive `sudo journalctl`. Add exact rules for the
+three UI tail choices (verify the journalctl path with `command -v journalctl`):
+
+```sudoers
+llama-dashboard ALL=(root) NOPASSWD: /usr/bin/journalctl -f -u llama-server.service --no-pager --no-hostname -n 100
+llama-dashboard ALL=(root) NOPASSWD: /usr/bin/journalctl -f -u llama-server.service --no-pager --no-hostname -n 500
+llama-dashboard ALL=(root) NOPASSWD: /usr/bin/journalctl -f -u llama-server.service --no-pager --no-hostname -n 2000
+```
+
+If you configure a different service or tail length, add its exact command;
+do not use an unrestricted journalctl wildcard. At most four log viewers run
+at once. Each owns its subprocess and closing one does not stop the others.
+
 ### Enable the models.ini editor (deploy key — no more sudo for git)
 
 The dashboard edits `models.ini` inside the clone and commits/pulls/pushes as the
@@ -114,8 +129,8 @@ sudo -u llama-dashboard cat /home/llama-dashboard/.ssh/id_ed25519.pub
 #    paste the public key above, tick "Allow write access"
 
 # 4. Commit identity (local to this repo only)
-sudo -u llama-dashboard git config -C /mnt/ssd/llamacpp_models/models_ini user.name "llama-dashboard"
-sudo -u llama-dashboard git config -C /mnt/ssd/llamacpp_models/models_ini user.email "llama-dashboard@localhost"
+sudo -u llama-dashboard git -C /mnt/ssd/llamacpp_models/models_ini config user.name "llama-dashboard"
+sudo -u llama-dashboard git -C /mnt/ssd/llamacpp_models/models_ini config user.email "llama-dashboard@localhost"
 
 # 5. Verify both directions without touching the dashboard UI
 sudo -u llama-dashboard git -C /mnt/ssd/llamacpp_models/models_ini pull --ff-only
@@ -198,6 +213,36 @@ be set via an `Environment=` drop-in (`sudo systemctl edit llama-dashboard`).
 | `probe_interval_s` | `PROBE_INTERVAL_S` | `15` | how often the llama-server status and disk-usage probes run |
 
 ---
+
+## Security and concurrency
+
+Keep the listener on loopback behind Tailscale Serve, and restrict access with
+tailnet ACLs to administrators. The application does not authenticate users:
+any permitted client can edit configuration, use Git, read logs, and restart
+llama-server. Cross-origin browser writes are rejected; this is not a substitute
+for authentication or network access controls. Ensure a reverse proxy preserves
+the original Host header for Origin checks.
+
+Run **one application process**. File/Git locks, telemetry, and undo state are
+in-memory and do not coordinate across multiple workers or external editors.
+The browser sends a content revision (`If-Match`) for model edits and undo;
+stale writes return HTTP 409 rather than replacing newer content. API clients
+should send the quoted `revision` returned by `GET /api/models` in `If-Match`.
+For backward compatibility, legacy clients without the header are still allowed
+and do not receive stale-edit protection. Git changes from outside the dashboard
+are not covered by its locks.
+
+## Local regression checks
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m unittest discover -s tests -v
+node tests/test_frontend.cjs
+```
+
+The Node checks exercise frontend functions with a small DOM stub; they are not
+a substitute for browser smoke tests or a Jetson check of jtop/systemd access.
 
 ## Tear down
 

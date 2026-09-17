@@ -1507,6 +1507,9 @@ function miRawLiveCheck() {
 // ── models.ini editor ────────────────────────────────────────────
 var miData = null;          // last /api/models payload
 var miOriginal = null;      // {key:value} snapshot of the row being edited
+var miOriginalOrder = [];   // parameter order before editing
+var miEditRevision = null;
+var miRawRevision = null;
 var miEditArchived = false; // archived-state of the row being edited
 var miRegionOpen = {};      // per-region open/closed; every region starts collapsed
 
@@ -1518,10 +1521,13 @@ var REGION_LABELS = {
   'archived_models': 'Archived models',
 };
 
-function miPost(url, body) {
+function miPost(url, body, revision) {
+  var headers = { 'Content-Type': 'application/json' };
+  if (revision === undefined) revision = miData && miData.revision;
+  if (revision) headers['If-Match'] = '"' + revision + '"';
   return fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: headers,
     body: JSON.stringify(body || {}),
   }).then(function (r) { return r.json(); });
 }
@@ -2000,8 +2006,13 @@ function miParamRow(key, value) {
 
   var k = document.createElement('input'); k.className = 'mi-k mi-input'; k.value = key;
   var v = document.createElement('input'); v.className = 'mi-v mi-input'; v.value = value;
-  v.list = miDlForKey(key);            // file picker for mmproj / model-draft
-  k.addEventListener('input', function () { v.list = miDlForKey(k.value); });
+  function syncList() {
+    var id = miDlForKey(k.value);
+    if (id) v.setAttribute('list', id);
+    else v.removeAttribute('list');
+  }
+  syncList();
+  k.addEventListener('input', syncList);
   var del = document.createElement('button');
   del.className = 'mini-btn mi-danger';
   del.textContent = '✕';
@@ -2157,12 +2168,15 @@ function miEdit(i) {
   miLoadFiles();                       // keep the pickers fresh
   var s = miData.models[i];
   miEditArchived = !!s.archived;
+  miEditRevision = miData.revision;
   miEl('mi-name').value = s.name;
   miEl('mi-newname').value = s.name;
   miEl('mi-model').value = s.model || '';
   var box = miEl('mi-params');
   box.innerHTML = '';
   miOriginal = {};
+  miOriginalOrder = s.keys.filter(function (kv) { return kv.key !== 'model'; })
+                          .map(function (kv) { return kv.key; });
   s.keys.forEach(function (kv) {
     if (kv.key === 'model') { miOriginal.model = kv.value; return; }
     miOriginal[kv.key] = kv.value;
@@ -2186,11 +2200,13 @@ function miEditSummary() {
     bits.push('model \u2192 ' + model.split('/').pop());
   if (!model && miOriginal.model) bits.push('- model');
   var present = {};
+  var order = [];
   miEl('mi-params').querySelectorAll('.mi-param').forEach(function (row) {
     var k = row.querySelector('.mi-k').value.trim();
     var v = row.querySelector('.mi-v').value.trim();
     if (!k) return;
     present[k] = true;
+    order.push(k);
     if (!(k in miOriginal)) bits.push('+ ' + k + ' = ' + v);
     else if (miOriginal[k] !== v) bits.push(k + ': ' + miOriginal[k] + ' \u2192 ' + v);
   });
@@ -2198,6 +2214,8 @@ function miEditSummary() {
     if (k === 'model' || present[k]) return;
     bits.push('- ' + k);
   });
+  if (JSON.stringify(order) !== JSON.stringify(miOriginalOrder))
+    bits.push('parameter order: ' + order.join(', '));
   return bits;
 }
 
@@ -2231,7 +2249,7 @@ function miSaveEdit() {
   }
   if (!confirm('[' + name + ']\n  ' + bits.join('\n  ') + '\n\nsave?')) return;
   miOpStatus('mi-edit-status', 'saving…', true);
-  miPost('/api/models/section/edit', body).then(function (d) {
+  miPost('/api/models/section/edit', body, miEditRevision).then(function (d) {
     miOpStatus('mi-edit-status', d.ok ? 'saved' : d.error, !!d.ok);
     if (d.ok) { miEl('mi-editor').open = false; miLoad(); }
   }).catch(function () {
@@ -2293,6 +2311,7 @@ function miRawLoad() {
     .then(function (r) { return r.json(); })
     .then(function (d) {
       if (d.ok && d.raw !== undefined) {
+        miRawRevision = d.revision;
         miEl('mi-raw-text').value = d.raw;
         miRawSync();
         miRawLiveCheck();
@@ -2311,6 +2330,7 @@ var miDiffApplyFn = null;
 
 function miRawSave() {
   var text = miEl('mi-raw-text').value;
+  var revision = miRawRevision;
   // parse-check + preview before anything is written (#6)
   miRawStatus('checking\u2026', true);
   miPost('/api/models/raw/diff', { text: text }).then(function (d) {
@@ -2318,8 +2338,12 @@ function miRawSave() {
     if (!d.changed) { miRawStatus('no changes', true); return; }
     miShowDiff(d.diff, d.sections, function () {
       miRawStatus('saving\u2026', true);
-      miPost('/api/models/raw', { text: text }).then(function (r) {
-        if (r.ok) { miRawStatus('saved', true); miLoad(); }
+      miPost('/api/models/raw', { text: text }, revision).then(function (r) {
+        if (r.ok) {
+          miRawRevision = r.revision;
+          miRawStatus('saved', true);
+          miLoad();
+        }
         else miRawStatus(r.error || 'save failed', false);
       }).catch(function () {
         miRawStatus('network error', false);

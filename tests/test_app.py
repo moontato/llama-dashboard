@@ -499,9 +499,9 @@ class ApiTestCase(unittest.TestCase):
         seq = [c[0] for c in calls if c]
         i_add, i_commit = seq.index("add"), seq.index("commit")
         self.assertLess(i_add, i_commit)
-        self.assertEqual(calls[i_add], ["add", "models.ini"])
-        self.assertEqual(calls[i_commit][:2], ["commit", "-m"])
-        self.assertEqual(" ".join(calls[i_commit][2:]), "from ui")
+        self.assertEqual(calls[i_add], ["add", "--", "models.ini"])
+        self.assertEqual(calls[i_commit],
+                         ["commit", "--only", "-m", "from", "ui", "--", "models.ini"])
 
     def test_git_commit_clean_tree(self):
         self.fake_status = "1"
@@ -536,6 +536,8 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(g["ahead"], 1)
         self.assertEqual(g["behind"], 1)
         self.assertEqual(g["last_commit"], "abc123 fake commit")
+        self.assertIn(["rev-list", "--count", "origin/main..HEAD"], self._git_calls())
+        self.assertIn(["rev-list", "--count", "HEAD..origin/main"], self._git_calls())
 
     def test_git_status_refreshes_remote_ref(self):
         # GET must trigger a throttled `git fetch origin <branch>` so the
