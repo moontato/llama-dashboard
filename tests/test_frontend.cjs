@@ -2,12 +2,12 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const source = fs.readFileSync('static/index.html', 'utf8');
+const source = fs.readFileSync('static/models.js', 'utf8');
 function loadFunction(name, context) {
-  const start = source.indexOf('function ' + name + '(');
+  const start = source.search(new RegExp('^(?:async )?function ' + name + '\\(', 'm'));
   assert(start >= 0, 'missing function ' + name);
-  const end = source.indexOf('\nfunction ', start + 1);
-  vm.runInContext(source.slice(start, end), context);
+  const next = source.slice(start + 1).search(/\n(?:async )?function /);
+  vm.runInContext(source.slice(start, next < 0 ? undefined : start + 1 + next), context);
 }
 function element(value = '') {
   return {
@@ -56,6 +56,10 @@ context.miData = { revision: 'current' };
 context.fetch = (url, options) => {
   captured = options;
   return Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: true }) });
+};
+context.uiRequest = async (url, options) => {
+  const response = await context.fetch(url, options);
+  return response.json();
 };
 loadFunction('miPost', context);
 context.miPost('/api/models/undo', {});

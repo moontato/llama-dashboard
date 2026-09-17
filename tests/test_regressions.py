@@ -53,6 +53,25 @@ class ApiRegressionTests(unittest.TestCase):
         self.addCleanup(self.undo.stop)
         self.client = app.app.test_client()
 
+    def test_undo_availability_is_independent_of_git_dirty_state(self):
+        with patch.object(app, '_git_status', return_value={'ok': True, 'dirty': True}):
+            self.assertFalse(self.client.get('/api/models').get_json()['undo_available'])
+            self.client.post('/api/models/section/edit', json={'name': 'a', 'set': {'x': '2'}})
+            self.assertTrue(self.client.get('/api/models').get_json()['undo_available'])
+            self.client.post('/api/models/undo', json={})
+            self.assertFalse(self.client.get('/api/models').get_json()['undo_available'])
+            self.path.unlink()
+            self.assertFalse(self.client.get('/api/models').get_json()['undo_available'])
+
+    def test_models_snapshot_is_read_under_file_lock(self):
+        original = app._load_doc
+        def load_locked():
+            self.assertTrue(app._write_lock.locked())
+            return original()
+        with patch.object(app, '_load_doc', side_effect=load_locked), \
+                patch.object(app, '_git_status', return_value={'ok': False}):
+            self.assertEqual(self.client.get('/api/models').status_code, 200)
+
     def test_api_preserves_crlf(self):
         self.path.write_bytes(b'[a]\r\nx = 1\r\n')
         response = self.client.post('/api/models/section/edit', json={'name': 'a', 'set': {'x': '2'}})

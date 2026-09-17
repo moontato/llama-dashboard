@@ -1,11 +1,12 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const html = fs.readFileSync('static/index.html', 'utf8');
 function load(name, ctx) {
-  const start = html.indexOf('function ' + name + '(');
-  const end = html.indexOf('\nfunction ', start + 1);
-  vm.runInContext(html.slice(start, end), ctx);
+  const source = fs.readFileSync(name === 'uiRequest' ? 'static/ui.js' : 'static/models.js', 'utf8');
+  const start = source.search(new RegExp('^(?:async )?function ' + name + '\\(', 'm'));
+  assert(start >= 0, 'missing function ' + name);
+  const next = source.slice(start + 1).search(/\n(?:async )?function /);
+  vm.runInContext(source.slice(start, next < 0 ? undefined : start + 1 + next), ctx);
 }
 function element(value = '') {
   return { value, disabled: false, hidden: false, textContent: '', open: true,
@@ -31,14 +32,15 @@ const context = vm.createContext({
   miEl: el, miData: { writable: true, revision: 'initial' },
   miEditArchived: false, miEditRevision: 'initial', miRawRevision: 'initial',
   miOriginal: { model: '/a.gguf', x: '1', y: '2' }, miOriginalOrder: ['x', 'y'],
-  confirm: () => confirmResult,
+  uiConfirm: () => Promise.resolve(confirmResult),
+  uiDialog: () => Promise.resolve(confirmResult),
   miOpStatus: (id, message) => { status = message; },
   miRawStatus: message => { status = message; },
   miRawSync() {}, miRawLiveCheck() {}, miLoad() {},
   miShowDiff: (...args) => { comparison = args; },
 });
 vm.runInContext(fs.readFileSync('static/editor-state.js', 'utf8'), context);
-['miEditSummary', 'miSaveEdit', 'miRawLoad', 'miRawSave', 'miPost'].forEach(name => load(name, context));
+['uiRequest', 'miEditSummary', 'miSaveEdit', 'miRawLoad', 'miRawSave', 'miPost'].forEach(name => load(name, context));
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 async function main() {
@@ -52,7 +54,7 @@ async function main() {
   assert.equal(el('mi-edit-state').textContent, 'Unsaved changes');
   assert.equal(el('mi-edit-save').disabled, false);
   confirmResult = false;
-  assert.equal(context.miMayDiscard('edit'), false);
+  assert.equal(await context.miMayDiscard('edit'), false);
   assert.equal(context.miIsDirty('edit'), true, 'cancel keeps draft');
   confirmResult = true;
   let prevented = false;
@@ -67,6 +69,7 @@ async function main() {
   };
   context.miSaveEdit();
   context.miSaveEdit();
+  await flush();
   assert.equal(requests, 1, 'duplicate saves blocked');
   assert.equal(el('mi-edit-fields').disabled, true);
   assert.equal(el('mi-edit-save').disabled, true);
@@ -109,7 +112,7 @@ async function main() {
   confirmResult = false;
   requests = 0;
   context.fetch = () => { requests++; return Promise.reject(new Error('offline')); };
-  context.miRawLoad();
+  await context.miRawLoad();
   assert.equal(requests, 0);
   confirmResult = true;
   await context.miRawLoad();

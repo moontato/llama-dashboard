@@ -12,3 +12,24 @@ config.json
 .vscode/
 
 image.png
+
+# local frontend tooling and browser test artifacts
+node_modules/
+.npm-cache/
+.playwright-browsers/
+test-results/
+playwright-report/
+
+# personal local environment files (not part of the project)
+.bashrc
+.bash_profile
+.profile
+.zshrc
+.zprofile
+.gitconfig
+.gitmodules
+.ripgreprc
+.mcp.json
+.claude
+.idea
+.idea/

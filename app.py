@@ -864,13 +864,16 @@ def _git_status() -> Dict[str, Any]:
 def api_models() -> Response:
     _refresh_models_gate()
     try:
-        _text, doc = _load_doc()
+        with _write_lock:
+            _text, doc = _load_doc()
+            undo_available = _last_raw["text"] is not None
     except (OSError, UnicodeDecodeError):
         # file missing or unreadable: degraded payload carrying the
         # gate's reason, so the UI shows its read-only banner
         return jsonify({
             "ok": True,
             "writable": False,
+            "undo_available": False,
             "write_reason": _models_gate["reason"],
             "models": [],
             "aliases": {},
@@ -885,6 +888,7 @@ def api_models() -> Response:
         "aliases": doc.group_aliases(),
         "raw": _text,
         "revision": _revision(_text),
+        "undo_available": undo_available,
         "git": git,
     })
 

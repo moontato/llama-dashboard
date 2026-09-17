@@ -1,0 +1,13 @@
+{
+  "name": "llama-dashboard-ui-tests",
+  "private": true,
+  "scripts": {
+    "test": "node tests/test_frontend.cjs && node tests/test_editor_state.cjs",
+    "test:ui": "playwright test",
+    "test:ui:update": "playwright test --update-snapshots"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.11.1",
+    "@playwright/test": "1.58.2"
+  }
+}

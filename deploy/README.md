@@ -242,8 +242,19 @@ node tests/test_frontend.cjs
 node tests/test_editor_state.cjs
 ```
 
-The Node checks exercise frontend functions with a small DOM stub; they are not
-a substitute for browser smoke tests or a Jetson check of jtop/systemd access.
+Browser tests (development only; Node + npm, no frontend build step):
+
+```bash
+npm install --cache .npm-cache
+npx playwright install chromium --only-shell
+npm run test:ui
+```
+
+They run the static files from a local test server with mocked `/api` routes,
+SSE streams, and accessibility (axe-core) checks; they never touch a real
+models.ini, git repository, service, or network. The DOM-stub Node tests and
+these browser tests are not a substitute for the Jetson smoke check of
+jtop/systemd access.
 
 ## Tear down
 
