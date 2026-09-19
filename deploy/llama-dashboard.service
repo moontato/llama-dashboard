@@ -16,7 +16,9 @@ ExecStart=/usr/bin/python3 /opt/llama-dashboard/app.py
 Restart=always
 RestartSec=5
 
-# Harden slightly — no writes needed outside the working dir.
+# The service needs write access to the configured models.ini and model root
+# (including mtp/mmproj/archived) for editing and GGUF downloads.
+# PrivateTmp does not grant those permissions; configure ownership/groups.
 PrivateTmp=true
 
 [Install]

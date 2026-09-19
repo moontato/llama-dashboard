@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import contextlib
 import difflib
 import hashlib
@@ -18,6 +19,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 from models_ini import Document, ModelsIniError, parse
+from model_downloads import DownloadManager, DownloadError, DownloadConflict
+
+_downloads = DownloadManager()
+atexit.register(_downloads.close)
 
 # ─────────────────────── Config ──────────────────────────────────
 # Precedence: environment variable (key in upper case) > config.json
@@ -794,7 +799,7 @@ def _scan_model_files() -> Dict[str, List[Dict[str, Any]]]:
             except OSError:
                 continue          # vanished or unreadable — skip silently
             rel = os.path.relpath(p, root)
-            if fn.lower().startswith("mmproj"):
+            if fn.lower().startswith("mmproj") or "mmproj" in rel.lower().split(os.sep):
                 cat = "mmproj"
             elif "mtp" in rel.lower().split(os.sep):
                 cat = "mtp"
@@ -896,6 +901,31 @@ def api_models() -> Response:
 @app.route("/api/models/files", methods=["GET"])
 def api_models_files() -> Response:
     return jsonify({"ok": True, "root": _models_dir(), **_scan_model_files()})
+
+
+@app.route("/api/models/downloads", methods=["GET", "POST"])
+def api_model_downloads() -> Response:
+    if request.method == "GET":
+        return jsonify({"ok": True, "root": _models_dir(), "jobs": _downloads.snapshot()})
+    data = request.get_json()
+    try:
+        job = _downloads.start(_models_dir(), data.get("url"),
+                               data.get("subdirectory", ""), data.get("filename"))
+        return jsonify({"ok": True, "job": job}), 202
+    except DownloadConflict as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 409
+    except DownloadError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except OSError:
+        return jsonify({"ok": False, "error": "Cannot write to the model destination; check directory permissions"}), 400
+
+
+@app.route("/api/models/downloads/<job_id>/cancel", methods=["POST"])
+def api_model_download_cancel(job_id: str) -> Response:
+    job = _downloads.cancel(job_id)
+    if job is None:
+        return jsonify({"ok": False, "error": "Download not found"}), 404
+    return jsonify({"ok": True, "job": job})
 
 
 @app.route("/api/models/raw", methods=["POST"])

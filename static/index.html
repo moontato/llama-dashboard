@@ -270,11 +270,33 @@
           </div>
           <div class="mini-actions">
             <button class="mini-btn" onclick="miLoad()">Refresh</button
+            ><button class="mini-btn" id="download-toggle" aria-expanded="false" aria-controls="download-panel" onclick="downloadToggle()">Download GGUF</button
             ><button class="mini-btn mi-primary" onclick="miOpenAdd()">
               + Add model
             </button>
           </div>
         </div>
+        <section id="download-panel" class="card download-panel" aria-labelledby="download-title" hidden>
+          <h2 id="download-title">Download GGUF</h2>
+          <p class="muted">Download a public Hugging Face file. This does not create a preset or restart the server.</p>
+          <form id="download-form">
+            <label for="download-url">Hugging Face URL</label>
+            <input id="download-url" type="url" required placeholder="https://huggingface.co/owner/repo/blob/main/model.gguf" autocomplete="off" />
+            <div class="download-fields">
+              <div><label for="download-directory">Destination</label>
+                <select id="download-directory"><option value="">Model root</option><option value="mtp">mtp</option><option value="mmproj">mmproj</option><option value="archived">archived</option></select>
+              </div>
+              <div><label for="download-filename">Filename (optional)</label>
+                <input id="download-filename" type="text" placeholder="Keep original filename" autocomplete="off" />
+              </div>
+            </div>
+            <p id="download-preview" class="muted wrap"></p>
+            <p class="muted">“archived” is a folder, not preset archiving. One download at a time; existing files are never overwritten.</p>
+            <button id="download-start" class="mini-btn mi-primary" type="submit">Download</button>
+          </form>
+          <p id="download-message" role="status"></p>
+          <div id="download-jobs" aria-label="Recent downloads"></div>
+        </section>
         <div id="models-readonly" class="banner" role="status">
           <span id="models-readonly-why"></span>
         </div>
@@ -664,6 +686,7 @@
     <script src="/static/ui.js"></script>
     <script src="/static/editor-state.js"></script>
     <script src="/static/models.js"></script>
+    <script src="/static/downloads.js"></script>
     <script src="/static/logs.js"></script>
     <script src="/static/telemetry.js"></script>
     <script src="/static/app.js"></script>

@@ -1,3 +1,11 @@
+.download-panel { margin-bottom: 1rem; }
+.download-panel label { display: block; margin: .7rem 0 .35rem; }
+.download-panel input, .download-panel select { width: 100%; min-width: 0; }
+.download-fields { display: grid; grid-template-columns: 1fr 2fr; gap: 1rem; }
+.download-job { border-top: 1px solid var(--border); padding-top: 1rem; margin-top: 1rem; overflow-wrap: anywhere; }
+.download-job progress { width: 100%; accent-color: var(--accent); }
+@media (max-width: 600px) { .download-fields { grid-template-columns: 1fr; gap: 0; } }
+
 :root {
   color-scheme: dark;
   --bg: #10141c;

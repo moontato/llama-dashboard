@@ -5,7 +5,7 @@ function model(name, region, path, archived = false) {
     keys: [...(path ? [{key: 'model', value: path}] : []), {key: 'ctx-size', value: '32768'}, {key: 'temp', value: '0.7'}] };
 }
 function createState() {
-  return { revision: 1, undo: null, failNext: null, requests: [], writable: true,
+  return { revision: 1, undo: null, failNext: null, requests: [], writable: true, downloads: [],
     raw: '[*]\nctx-size = 32768\n\n[Qwen3-8B]\nmodel = /models/Qwen3-8B-Q4_K_M.gguf\ntemp = 0.7\n',
     models: [model('*', 'global', ''), model('Coding', 'profiles', '/models/Qwen3-8B-Q4_K_M.gguf'),
       model('Qwen3-8B', 'models', '/models/Qwen3-8B-Q4_K_M.gguf'),
@@ -56,6 +56,24 @@ async function installFixtures(context, state) {
       return reply({ok: true, writable: state.writable, write_reason: state.writable ? '' : 'file is read-only',
         revision: 'r' + state.revision, models: clone(state.models), aliases, raw: state.raw,
         undo_available: !!state.undo, git: {ok: true, branch: 'main', dirty: true, ahead: 1, behind: 0, last_commit: 'abc123 Tune presets'}});
+    }
+    if (url.pathname === '/api/models/downloads') {
+      if (req.method() === 'GET') return reply({ok: true, root: '/models', jobs: clone(state.downloads)});
+      if (state.downloads.some(j => ['connecting', 'downloading'].includes(j.state))) return reply({ok: false, error: 'A download is already running'}, 409);
+      const original = decodeURIComponent(new URL(body.url).pathname.split('/').pop());
+      let name = body.filename || original;
+      if (!name.endsWith('.gguf')) name += '.gguf';
+      const destination = (body.subdirectory ? body.subdirectory + '/' : '') + name;
+      const job = {id: String(state.downloads.length + 1), state: 'downloading', filename: name, destination,
+        path: '/models/' + destination, downloaded_bytes: 1048576, total_bytes: 10485760, error: null};
+      state.downloads.unshift(job);
+      return reply({ok: true, job}, 202);
+    }
+    if (/^\/api\/models\/downloads\/[^/]+\/cancel$/.test(url.pathname)) {
+      const job = state.downloads.find(j => j.id === url.pathname.split('/')[4]);
+      if (!job) return reply({ok: false, error: 'Not found'}, 404);
+      job.state = 'cancelled';
+      return reply({ok: true, job});
     }
     if (url.pathname === '/api/models/files') return reply({ok: true, gguf: [{path: '/models/Qwen3-8B-Q4_K_M.gguf', rel: 'Qwen3-8B-Q4_K_M.gguf', size_gib: 8}], mmproj: [], mtp: []});
     if (url.pathname === '/api/models/raw/check') return reply({ok: true, sections: 2});

@@ -46,6 +46,41 @@ Notes:
 - Step 2 must run before the service starts; if `mv` fails because files are in use, stop the old unit first: `sudo systemctl disable --now jtop-web`.
 - The old unit file `jtop-web.service` is replaced by `llama-dashboard.service`; if systemd warns about a lingering `jtop-web.service`, remove it: `sudo rm /etc/systemd/system/jtop-web.service`.
 
+## GGUF downloads in the Models tab
+
+Use **Download GGUF** with a public Hugging Face `/blob/…/file.gguf` or
+`/resolve/…/file.gguf` URL. Choose the model root (configured by `models_dir` /
+`MODELS_DIR`, otherwise derived from the INI location), `mtp`, `mmproj`, or
+`archived`. An optional filename changes the saved basename; `.gguf` is added
+when no extension is supplied. The archived folder is separate from preset
+archiving. Downloads do not modify `models.ini`, create presets, or restart
+llama-server. Once complete, the file becomes available in the editor pickers.
+
+- The service user needs write/search permission on the model root and chosen
+  subdirectories. Missing allowed subdirectories are created automatically.
+  Grant ownership/group permissions narrowly; do not run the service as root.
+- Outbound HTTPS and DNS must reach `huggingface.co` and Hugging Face's CDN
+  domains under `huggingface.co` and `hf.co` (including `xethub.hf.co`). Arbitrary
+  redirect hosts, non-HTTPS URLs, and private-address resolutions are rejected.
+- Public, ungated files only; no token is requested or stored. Download each
+  shard explicitly if a model is split across files; there is no shard discovery.
+- One active download per server, using a background thread. This requires the
+  existing **single-process** deployment; multiple WSGI workers are unsupported.
+  Closing the browser or changing tabs does not stop a transfer. Status/history
+  (up to 20 jobs) is held in server memory and is lost on service restart.
+- Cancelling or failing deletes the partial file. After an abrupt service stop,
+  downloader-owned `.llama-download-<id>.part` files are cleaned on the first new
+  download into that destination. There is no automatic resume. Cancellation
+  may wait for a pending network read to time out (15 seconds).
+- Allow free space for the complete file. Data streams into a hidden partial on
+  the destination filesystem, then is atomically published using a hard link
+  without overwriting existing files. The filesystem must support hard links;
+  publication does not create a second copy of the data. GGUF magic and known
+  content length are checked; this is not a full model integrity/compatibility
+  check. Partial files never appear in pickers.
+- Keep access restricted to trusted users (for example, the existing tailnet).
+  The dashboard does not add authentication for this disk-writing feature.
+
 ## Prerequisites
 
 In the Tailscale admin console, enable **MagicDNS** and **HTTPS certificates**
